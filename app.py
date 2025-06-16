@@ -39,6 +39,7 @@ def analisar_ponto(df):
     df['Minutos_turno_entrada'] = df['Turnos.ENTRADA'].apply(lambda t: t.hour * 60 + t.minute if pd.notnull(t) else None)
     df['Minutos_turno_saida'] = df['Turnos.SAIDA'].apply(lambda t: t.hour * 60 + t.minute if pd.notnull(t) else None)
 
+    # Fora do turno = ±1 hora
     df['Entrada_fora_turno'] = df.apply(
         lambda row: (
             row['Minutos_entrada'] is not None and 
@@ -48,110 +49,122 @@ def analisar_ponto(df):
         axis=1
     )
 
+    # Minutos trabalhados no dia
     df['Minutos_trabalhados'] = df.apply(
-        lambda row: diff_minutes(row['Entrada 1'], row['Saída 1']) if (pd.notnull(row['Entrada 1']) and pd.notnull(row['Saída 1'])) else None,
+        lambda row: diff_minutes(row['Entrada 1'], row['Saída 1']) if row['Entrada 1'] and row['Saída 1'] else None,
         axis=1
     )
 
     df['Minutos_extras'] = df.apply(
-        lambda row: (
-            row['Minutos_trabalhados'] - (row['Minutos_turno_saida'] - row['Minutos_turno_entrada'])
-            if (row['Minutos_trabalhados'] is not None and 
-                row['Minutos_turno_saida'] is not None and 
-                row['Minutos_turno_entrada'] is not None)
-            else 0
-        ),
+        lambda row: row['Minutos_trabalhados'] - (row['Minutos_turno_saida'] - row['Minutos_turno_entrada'])
+        if row['Minutos_trabalhados'] is not None and row['Minutos_turno_saida'] is not None and row['Minutos_turno_entrada'] is not None
+        else 0,
         axis=1
     )
 
     df['Hora_extra'] = df['Minutos_extras'] > 15
 
+    # Formatação para exibição
     df['Data_fmt'] = df['Data'].dt.strftime('%d/%m')
     df['Entrada_fmt'] = df['Entrada 1'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
     df['Saida_fmt'] = df['Saída 1'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
-    df['Turno_entrada_fmt'] = df['Turnos.ENTRADA'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
-    df['Turno_saida_fmt'] = df['Turnos.SAIDA'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
+
+    # Coluna de mês para filtro
+    df['AnoMes'] = df['Data'].dt.to_period('M')
 
     return df
 
 df = carregar_dados()
 df = analisar_ponto(df)
 
-# filtro mês
-meses_disponiveis = df['Data'].dt.to_period('M').dropna().unique()
-meses_disponiveis = sorted(meses_disponiveis, reverse=True)
+# Filtro por mês
+meses_disponiveis = sorted(df['AnoMes'].dropna().unique())
+mes_selecionado = st.selectbox("Selecione o mês para análise:", meses_disponiveis)
 
-mes_selecionado = st.sidebar.selectbox(
-    "Escolha o mês para análise:",
-    options=meses_disponiveis,
-    format_func=lambda x: x.strftime('%m/%Y')
-)
+df = df[df['AnoMes'] == mes_selecionado]
 
-df_mes = df[df['Data'].dt.to_period('M') == mes_selecionado]
+# Ranking - Total de Horas Extras por funcionário (em horas)
+ranking_horas = df[df['Hora_extra']].groupby('Nome')['Minutos_extras'].sum().reset_index()
+ranking_horas['Horas_extras'] = (ranking_horas['Minutos_extras'] / 60).round(2)
+ranking_horas = ranking_horas.sort_values(by='Horas_extras', ascending=False)
 
-ranking_excesso = df_mes[df_mes['Hora_extra']].groupby('Nome').agg(
-    Dias_com_hora_extra=('Hora_extra', 'count'),
-    Total_Minutos_Extras=('Minutos_extras', 'sum')
-).reset_index()
-ranking_excesso['Total_Horas_Extras'] = (ranking_excesso['Total_Minutos_Extras'] / 60).round(2)
+# Ranking - Total de Dias Fora do Turno por funcionário
+ranking_fora_turno = df[df['Entrada_fora_turno']].groupby('Nome').size().reset_index(name='Dias_fora_turno')
+ranking_fora_turno = ranking_fora_turno.sort_values(by='Dias_fora_turno', ascending=False)
 
-ranking_turno = df_mes[df_mes['Entrada_fora_turno']].groupby('Nome').agg(
-    Dias_fora_do_turno=('Entrada_fora_turno', 'count')
-).reset_index()
+# Exibir rankings lado a lado
+col1, col2 = st.columns(2)
 
-# Mostrar ranking horas extras (clicável)
-st.subheader("🚀 Ranking - Horas Extras (clique para ver detalhes)")
-
-gb = GridOptionsBuilder.from_dataframe(
-    ranking_excesso.sort_values(by='Total_Horas_Extras', ascending=False)[['Nome', 'Dias_com_hora_extra', 'Total_Horas_Extras']]
-)
-gb.configure_selection(selection_mode='single', use_checkbox=False)
-grid_options = gb.build()
-
-grid_response = AgGrid(
-    ranking_excesso.sort_values(by='Total_Horas_Extras', ascending=False)[['Nome', 'Dias_com_hora_extra', 'Total_Horas_Extras']],
-    gridOptions=grid_options,
-    update_mode=GridUpdateMode.SELECTION_CHANGED,
-    theme='alpine',
-    enable_enterprise_modules=False,
-    fit_columns_on_grid_load=True,
-    height=250,
-    reload_data=True
-)
-
-selected_rows = grid_response['selected_rows']
-
-if selected_rows:
-    nome_selecionado = selected_rows[0]['Nome']
-    st.markdown(f"### Detalhes de infrações para: **{nome_selecionado}**")
-
-    df_func = df_mes[df_mes['Nome'] == nome_selecionado]
-    df_func = df_func[(df_func['Hora_extra']) | (df_func['Entrada_fora_turno'])]
-
-    df_func['Horas_extras'] = df_func['Minutos_extras'].apply(lambda x: round(x / 60, 2) if x > 0 else 0)
-
-    st.dataframe(
-        df_func[['Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Turno_entrada_fmt', 'Turno_saida_fmt', 'Horas_extras', 'Entrada_fora_turno', 'Hora_extra']],
-        use_container_width=True,
-        column_config={
-            'Data_fmt': 'Data',
-            'Entrada_fmt': 'Entrada',
-            'Saida_fmt': 'Saída',
-            'Turno_entrada_fmt': 'Turno Entrada',
-            'Turno_saida_fmt': 'Turno Saída',
-            'Horas_extras': 'Horas Extras',
-            'Entrada_fora_turno': 'Fora do Turno',
-            'Hora_extra': 'Hora Extra'
-        }
+with col1:
+    st.subheader("🚀 Ranking - Total de Horas Extras")
+    gb = GridOptionsBuilder.from_dataframe(ranking_horas)
+    gb.configure_selection(selection_mode='single', use_checkbox=True)
+    grid_horas = AgGrid(
+        ranking_horas,
+        gridOptions=gb.build(),
+        update_mode=GridUpdateMode.SELECTION_CHANGED,
+        theme='fresh',
+        fit_columns_on_grid_load=True
+    )
+    
+with col2:
+    st.subheader("⏰ Ranking - Total de Dias Fora do Turno")
+    gb2 = GridOptionsBuilder.from_dataframe(ranking_fora_turno)
+    gb2.configure_selection(selection_mode='single', use_checkbox=True)
+    grid_fora_turno = AgGrid(
+        ranking_fora_turno,
+        gridOptions=gb2.build(),
+        update_mode=GridUpdateMode.SELECTION_CHANGED,
+        theme='fresh',
+        fit_columns_on_grid_load=True
     )
 
-# Ranking fora do turno (não clicável para simplificar)
-st.subheader("⏰ Ranking - Dias Fora do Turno")
-st.dataframe(
-    ranking_turno.sort_values(by='Dias_fora_do_turno', ascending=False),
-    use_container_width=True,
-    column_config={
-        'Nome': 'Funcionário',
-        'Dias_fora_do_turno': 'Dias Fora do Turno'
-    }
-)
+# Mostrar detalhes ao clicar no nome do funcionário (nas duas tabelas)
+st.markdown("---")
+st.subheader("🔎 Detalhes das Infrações")
+
+selected_rows_horas = grid_horas['selected_rows']
+selected_rows_fora = grid_fora_turno['selected_rows']
+
+# Função para exibir detalhes das infrações de um funcionário
+def mostrar_infracoes(nome):
+    df_func = df[df['Nome'] == nome].copy()
+    df_func = df_func[(df_func['Hora_extra']) | (df_func['Entrada_fora_turno'])].copy()
+
+    if df_func.empty:
+        st.write(f"Nenhuma infração encontrada para {nome} no mês selecionado.")
+        return
+
+    df_func['Tipo de Infração'] = df_func.apply(
+        lambda row: "Hora Extra" if row['Hora_extra'] else ("Fora do Turno" if row['Entrada_fora_turno'] else "OK"),
+        axis=1
+    )
+    df_func['Horas_extras'] = df_func['Minutos_extras'].apply(lambda x: round(x/60, 2) if x > 0 else 0)
+
+    df_func_display = df_func[['Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Turnos.ENTRADA', 'Turnos.SAIDA', 'Tipo de Infração', 'Horas_extras']].copy()
+
+    # Formatando colunas de turno
+    df_func_display['Turno Entrada'] = df_func_display['Turnos.ENTRADA'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
+    df_func_display['Turno Saída'] = df_func_display['Turnos.SAIDA'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
+
+    df_func_display = df_func_display.drop(columns=['Turnos.ENTRADA', 'Turnos.SAIDA'])
+    df_func_display = df_func_display.rename(columns={
+        'Data_fmt': 'Data',
+        'Entrada_fmt': 'Entrada',
+        'Saida_fmt': 'Saída',
+        'Tipo de Infração': 'Infração',
+        'Horas_extras': 'Horas Extras'
+    })
+
+    st.write(f"Infrações para **{nome}**:")
+    st.dataframe(df_func_display, use_container_width=True)
+
+# Verificar seleção em horas extras
+if selected_rows_horas is not None and len(selected_rows_horas) > 0:
+    nome_selecionado = selected_rows_horas[0]['Nome']
+    mostrar_infracoes(nome_selecionado)
+
+# Verificar seleção em fora do turno
+elif selected_rows_fora is not None and len(selected_rows_fora) > 0:
+    nome_selecionado = selected_rows_fora[0]['Nome']
+    mostrar_infracoes(nome_selecionado)
