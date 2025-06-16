@@ -2,53 +2,26 @@ import streamlit as st
 import pandas as pd
 import requests
 from io import BytesIO
-from datetime import datetime, time
+from datetime import datetime, timedelta, time
 
 URL = "https://raw.githubusercontent.com/Patriciazambianco/PONTO/main/PONTO.xlsx"
 
-def convert_to_time(value):
-    if pd.isna(value):
+def convert_to_time(x):
+    try:
+        if pd.isnull(x):
+            return None
+        if isinstance(x, time):
+            return x
+        if isinstance(x, str):
+            return datetime.strptime(x.strip(), '%H:%M:%S').time()
+        if isinstance(x, pd.Timestamp):
+            return x.time()
+        # Tenta converter string no formato HH:MM sem segundos
+        if isinstance(x, (int, float)):
+            # pode ser Excel datetime decimal - aqui não vamos tratar, retorna None
+            return None
+    except Exception:
         return None
-    
-    # Se já for datetime.time
-    if isinstance(value, time):
-        return value
-    
-    # Se for datetime.datetime ou Timestamp
-    if isinstance(value, (datetime, pd.Timestamp)):
-        return value.time()
-    
-    # Se for float (excel geralmente converte hora em fração do dia)
-    if isinstance(value, (float, int)):
-        try:
-            total_seconds = int(value * 24 * 3600)
-            hours = total_seconds // 3600
-            minutes = (total_seconds % 3600) // 60
-            seconds = total_seconds % 60
-            return time(hours, minutes, seconds)
-        except:
-            return None
-    
-    # Se for string, tenta vários formatos comuns
-    if isinstance(value, str):
-        value = value.strip()
-        formatos = ['%H:%M:%S', '%H:%M', '%H.%M', '%H-%M', '%H%M']
-        for fmt in formatos:
-            try:
-                return datetime.strptime(value, fmt).time()
-            except:
-                continue
-        # Se falhar, tenta converter string numérica (ex: "0.75" = 18:00)
-        try:
-            num = float(value)
-            total_seconds = int(num * 24 * 3600)
-            hours = total_seconds // 3600
-            minutes = (total_seconds % 3600) // 60
-            seconds = total_seconds % 60
-            return time(hours, minutes, seconds)
-        except:
-            return None
-
     return None
 
 @st.cache_data
@@ -60,76 +33,80 @@ def carregar_dados():
 
     df['Data'] = pd.to_datetime(df['Data'], dayfirst=True, errors='coerce')
 
-    # Converte as colunas de hora usando nossa função customizada
     for col in ['Entrada 1', 'Saída 1', 'Turnos.ENTRADA', 'Turnos.SAIDA']:
         df[col] = df[col].apply(convert_to_time)
 
-    # DEBUG - Mostra valores únicos para ver o que pegou
-    st.write("Valores únicos Entrada 1:", df['Entrada 1'].dropna().unique())
-    st.write("Valores únicos Saída 1:", df['Saída 1'].dropna().unique())
+    return df
+
+def time_to_minutes(t):
+    return t.hour * 60 + t.minute if t else None
+
+def diff_minutes(t1, t2):
+    if t1 and t2:
+        dt1 = timedelta(hours=t1.hour, minutes=t1.minute, seconds=t1.second)
+        dt2 = timedelta(hours=t2.hour, minutes=t2.minute, seconds=t2.second)
+        delta = dt2 - dt1
+        return delta.total_seconds() / 60
+    return None
+
+def analisar_ponto(df):
+    # Calcula se a entrada está fora do turno (entrada > turno.entrada + 60 minutos)
+    df['Minutos_entrada'] = df['Entrada 1'].apply(lambda x: time_to_minutes(x))
+    df['Minutos_turno_entrada'] = df['Turnos.ENTRADA'].apply(lambda x: time_to_minutes(x))
+    df['Entrada_fora_turno'] = df.apply(
+        lambda row: row['Minutos_entrada'] > (row['Minutos_turno_entrada'] + 60) if row['Minutos_entrada'] and row['Minutos_turno_entrada'] else False,
+        axis=1
+    )
+
+    # Calcula minutos trabalhados (Saída - Entrada)
+    df['Minutos_trabalhados'] = df.apply(
+        lambda row: diff_minutes(row['Entrada 1'], row['Saída 1']) if row['Entrada 1'] and row['Saída 1'] else None,
+        axis=1
+    )
+    # Minutos do turno oficial (Turnos.SAIDA - Turnos.ENTRADA)
+    df['Minutos_turno'] = df.apply(
+        lambda row: diff_minutes(row['Turnos.ENTRADA'], row['Turnos.SAIDA']) if row['Turnos.ENTRADA'] and row['Turnos.SAIDA'] else None,
+        axis=1
+    )
+    # Calcular minutos extras (acima de 15 minutos)
+    df['Minutos_extra'] = df.apply(
+        lambda row: row['Minutos_trabalhados'] - row['Minutos_turno'] if row['Minutos_trabalhados'] and row['Minutos_turno'] and (row['Minutos_trabalhados'] - row['Minutos_turno'] > 15) else 0,
+        axis=1
+    )
+    # Flag hora extra (se passou de 15 minutos)
+    df['Hora_extra_flag'] = df['Minutos_extra'] > 15
+
+    # Converter minutos_extra para horas (float)
+    df['Horas_extra'] = df['Minutos_extra'] / 60
 
     return df
 
+def ranking_reincidentes(df):
+    # Agrupa por nome somando as horas extras e contando dias fora do turno
+    df_entrada_fora = df[df['Entrada_fora_turno'] == True]
+    df_hora_extra = df[df['Hora_extra_flag'] == True]
+
+    reincidentes_entrada = df_entrada_fora.groupby('Nome').size().reset_index(name='Dias_fora_turno')
+    reincidentes_extra = df_hora_extra.groupby('Nome')['Horas_extra'].sum().reset_index(name='Total_horas_extra')
+
+    # Junta os dois rankings (fora do turno + hora extra)
+    ranking = pd.merge(reincidentes_entrada, reincidentes_extra, on='Nome', how='outer').fillna(0)
+
+    # Ordena por mais dias fora do turno e mais horas extras
+    ranking = ranking.sort_values(by=['Dias_fora_turno', 'Total_horas_extra'], ascending=False).reset_index(drop=True)
+    return ranking
+
 df = carregar_dados()
+df = analisar_ponto(df)
+ranking = ranking_reincidentes(df)
 
 st.title("Análise de Ponto")
 
-st.dataframe(df)
+st.subheader("Dados completos com flags")
+st.dataframe(df[['Nome', 'Data', 'Entrada 1', 'Saída 1', 'Turnos.ENTRADA', 'Turnos.SAIDA', 'Entrada_fora_turno', 'Hora_extra_flag', 'Horas_extra']])
 
+st.subheader("Ranking de reincidentes (fora do turno e horas extras)")
+st.dataframe(ranking)
 
-# Mostrar dados carregados
-st.write("Dados carregados:")
-st.dataframe(df)
-
-# Função auxiliar para converter time em minutos (para cálculo)
-def time_to_minutes(t):
-    if t is None:
-        return None
-    return t.hour * 60 + t.minute + t.second / 60
-
-# Calcular se funcionário está fora do turno na entrada
-def esta_fora_do_turno(row):
-    entrada_real = time_to_minutes(row['Entrada 1'])
-    entrada_turno = time_to_minutes(row['Turnos.ENTRADA'])
-    if entrada_real is None or entrada_turno is None:
-        return False
-    # Se entrar mais de 1 hora depois do turno começar, está fora
-    return entrada_real > entrada_turno + 60
-
-# Calcular se fez hora extra (> 15 minutos além da saída do turno)
-def fez_hora_extra(row):
-    saida_real = time_to_minutes(row['Saída 1'])
-    saida_turno = time_to_minutes(row['Turnos.SAIDA'])
-    if saida_real is None or saida_turno is None:
-        return False
-    return saida_real > saida_turno + 15
-
-# Criar colunas novas com essas infos
-df['Fora do Turno?'] = df.apply(esta_fora_do_turno, axis=1)
-df['Hora Extra?'] = df.apply(fez_hora_extra, axis=1)
-
-# Ranking: contar quantos dias cada funcionário está fora do turno ou fez hora extra
-fora_turno_count = df[df['Fora do Turno?']].groupby('Nome').size().reset_index(name='Dias Fora do Turno')
-hora_extra_count = df[df['Hora Extra?']].groupby('Nome').size().reset_index(name='Dias com Hora Extra')
-
-# Juntar rankings numa tabela única
-ranking = pd.merge(fora_turno_count, hora_extra_count, on='Nome', how='outer').fillna(0)
-ranking['Dias Fora do Turno'] = ranking['Dias Fora do Turno'].astype(int)
-ranking['Dias com Hora Extra'] = ranking['Dias com Hora Extra'].astype(int)
-
-# Mostrar rankings ordenados
-st.subheader("Ranking - Dias Fora do Turno")
-st.dataframe(ranking.sort_values('Dias Fora do Turno', ascending=False))
-
-st.subheader("Ranking - Dias com Hora Extra")
-st.dataframe(ranking.sort_values('Dias com Hora Extra', ascending=False))
-
-# Mostrar reincidentes (que aparecem mais de 1 vez em fora do turno ou hora extra)
-reincidentes_fora_turno = ranking[ranking['Dias Fora do Turno'] > 1]
-reincidentes_hora_extra = ranking[ranking['Dias com Hora Extra'] > 1]
-
-st.subheader("Reincidentes Fora do Turno (mais de 1 dia)")
-st.dataframe(reincidentes_fora_turno)
-
-st.subheader("Reincidentes em Hora Extra (mais de 1 dia)")
-st.dataframe(reincidentes_hora_extra)
+total_horas_extras = df['Horas_extra'].sum()
+st.markdown(f"### Total de horas extras (considerando só acima de 15 minutos): **{total_horas_extras:.2f} horas**")
