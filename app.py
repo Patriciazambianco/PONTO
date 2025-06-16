@@ -1,7 +1,7 @@
 import pandas as pd
 import streamlit as st
 
-URL = "https://raw.githubusercontent.com/Patriciazambianco/PONTO/main/registro_ponto.xlsx"
+URL = "https://github.com/Patriciazambianco/PONTO/blob/main/PONTO.xlsx"
 
 @st.cache_data
 def carregar_dados():
