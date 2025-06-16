@@ -73,7 +73,7 @@ df = carregar_dados()
 df = analisar_ponto(df)
 
 # -------------------- FILTROS E CARDS --------------------
-st.title("📅 Relatório de Ponto – Infrações Mensais")
+st.title("📅 Relatório de Ponto")
 meses_disponiveis = sorted(df['AnoMes'].dropna().unique())
 todos = st.checkbox("Selecionar todos os meses", value=True)
 meses_selecionados = meses_disponiveis if todos else st.multiselect("Meses:", meses_disponiveis, default=meses_disponiveis[:1])
