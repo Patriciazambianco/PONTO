@@ -3,7 +3,8 @@ import pandas as pd
 import requests
 from io import BytesIO
 
-URL = "URL = "https://raw.githubusercontent.com/Patriciazambianco/PONTO/main/PONTO.xlsx"
+URL = "raw.githubusercontent.com/Patriciazambianco/PONTO/main/PONTO.xlsx"
+"
 "
 
 @st.cache_data
