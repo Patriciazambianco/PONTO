@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 st.set_page_config(layout="wide")
 st.title("📊 Relatório de Ponto – Análise de Horas Extras e Fora do Turno")
 
-# URL do Excel
 URL = "https://raw.githubusercontent.com/Patriciazambianco/PONTO/main/PONTO.xlsx"
 
 @st.cache_data
@@ -74,11 +73,9 @@ def analisar_ponto(df):
 
     return df
 
-# Load and process
 df = carregar_dados()
 df = analisar_ponto(df)
 
-# Filtro mês
 meses_disponiveis = df['Data'].dt.to_period('M').dropna().unique()
 meses_disponiveis = sorted(meses_disponiveis, reverse=True)
 
@@ -90,7 +87,6 @@ mes_selecionado = st.sidebar.selectbox(
 
 df_mes = df[df['Data'].dt.to_period('M') == mes_selecionado]
 
-# Rankings
 ranking_excesso = df_mes[df_mes['Hora_extra']].groupby('Nome').agg(
     Dias_com_hora_extra=('Hora_extra', 'count'),
     Total_Minutos_Extras=('Minutos_extras', 'sum')
@@ -124,46 +120,27 @@ with col2:
         }
     )
 
-# Detalhamento fixo para todos os infratores
+# Lista dos nomes para detalhamento (que estão no ranking)
+infratores = pd.concat([
+    ranking_excesso['Nome'],
+    ranking_turno['Nome']
+]).drop_duplicates().sort_values()
+
 st.markdown("---")
-st.subheader("🔎 Detalhamento dos Infratores")
+st.subheader("🔎 Detalhamento por Funcionário")
 
-# Pega só quem tem alguma irregularidade
-infratores = pd.merge(
-    ranking_excesso[['Nome', 'Total_Horas_Extras']],
-    ranking_turno[['Nome', 'Dias_fora_do_turno']],
-    on='Nome',
-    how='outer'
-).fillna(0)
+funcionario_selecionado = st.selectbox("Clique no nome para ver os detalhes:", infratores)
 
-# Ordena pelo total de horas extras
-infratores = infratores.sort_values(by='Total_Horas_Extras', ascending=False)
+# Dados do funcionário selecionado
+df_func = df_mes[df_mes['Nome'] == funcionario_selecionado].copy()
+df_func = df_func[(df_func['Hora_extra']) | (df_func['Entrada_fora_turno'])]
 
-# Merge com dados do mês para detalhes por funcionário
-df_irregular = df_mes[
-    (df_mes['Hora_extra']) | (df_mes['Entrada_fora_turno'])
-].copy()
+df_func['Horas_extras'] = df_func['Minutos_extras'].apply(lambda x: round(x / 60, 2) if x > 0 else 0)
 
-# Para ordenar pelo ranking, criamos uma coluna 'Ordem' com a posição na tabela de infratores
-df_irregular = df_irregular.merge(
-    infratores[['Nome']],
-    on='Nome',
-    how='left'
-)
-
-df_irregular['Horas_extras'] = df_irregular['Minutos_extras'].apply(lambda x: round(x / 60, 2) if x > 0 else 0)
-
-# Ordena por funcionário com mais horas extras e depois pela data
-df_irregular = df_irregular.sort_values(
-    by=['Nome', 'Data']
-)
-
-# Mostrar tabela com as colunas pedidas
 st.dataframe(
-    df_irregular[['Nome', 'Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Turno_entrada_fmt', 'Turno_saida_fmt', 'Horas_extras', 'Entrada_fora_turno', 'Hora_extra']],
+    df_func[['Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Turno_entrada_fmt', 'Turno_saida_fmt', 'Horas_extras', 'Entrada_fora_turno', 'Hora_extra']],
     use_container_width=True,
     column_config={
-        'Nome': 'Funcionário',
         'Data_fmt': 'Data',
         'Entrada_fmt': 'Entrada',
         'Saida_fmt': 'Saída',
@@ -174,5 +151,3 @@ st.dataframe(
         'Hora_extra': 'Hora Extra'
     }
 )
-
-
