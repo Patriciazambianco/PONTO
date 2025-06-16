@@ -13,10 +13,8 @@ def carregar_dados():
     arquivo_excel = BytesIO(response.content)
     df = pd.read_excel(arquivo_excel)
 
-    # Converter colunas de data
     df['Data'] = pd.to_datetime(df['Data'], dayfirst=True, errors='coerce')
 
-    # Converter colunas de horário para time
     for col in ['Entrada 1', 'Saída 1', 'Turnos.ENTRADA', 'Turnos.SAIDA']:
         df[col] = pd.to_datetime(df[col].astype(str), errors='coerce').dt.time
 
@@ -76,13 +74,40 @@ df = carregar_dados()
 df = analisar_ponto(df)
 ranking = ranking_reincidentes(df)
 
-st.title("Análise de Ponto - Correção de Horários")
-
-st.subheader("Dados com flags de fora do turno e hora extra")
-st.dataframe(df[['Nome', 'Data', 'Entrada 1', 'Saída 1', 'Turnos.ENTRADA', 'Turnos.SAIDA', 'Entrada_fora_turno', 'Hora_extra_flag', 'Horas_extra']])
+st.title("Análise de Ponto - Ranking Reincidentes")
 
 st.subheader("Ranking de reincidentes (fora do turno e horas extras)")
-st.dataframe(ranking)
 
+# Mostrar o ranking com botão expansível para detalhes
+for i, row in ranking.iterrows():
+    nome = row['Nome']
+    dias_fora = int(row['Dias_fora_turno'])
+    horas_extra = row['Total_horas_extra']
+
+    with st.expander(f"{nome} - Dias fora do turno: {dias_fora}, Horas extras: {horas_extra:.2f}"):
+        # Filtrar os registros desse funcionário que estão fora do turno ou com hora extra
+        detalhes = df[
+            (df['Nome'] == nome) & ((df['Entrada_fora_turno']) | (df['Hora_extra_flag']))
+        ].copy()
+
+        # Formatar as datas no padrão dd/mm/yyyy
+        detalhes['Data_formatada'] = detalhes['Data'].dt.strftime('%d/%m/%Y')
+
+        # Mostrar uma tabela com as datas e horários do erro
+        st.dataframe(detalhes[[
+            'Data_formatada', 'Entrada 1', 'Saída 1', 'Turnos.ENTRADA', 'Turnos.SAIDA',
+            'Entrada_fora_turno', 'Hora_extra_flag', 'Horas_extra'
+        ]].rename(columns={
+            'Data_formatada': 'Data',
+            'Entrada 1': 'Entrada Real',
+            'Saída 1': 'Saída Real',
+            'Turnos.ENTRADA': 'Entrada do Turno',
+            'Turnos.SAIDA': 'Saída do Turno',
+            'Entrada_fora_turno': 'Fora do Turno',
+            'Hora_extra_flag': 'Hora Extra?',
+            'Horas_extra': 'Horas Extras (h)'
+        }))
+
+# Mostrar total geral de horas extras
 total_horas_extras = df['Horas_extra'].sum()
 st.markdown(f"### Total de horas extras (considerando só acima de 15 minutos): **{total_horas_extras:.2f} horas**")
