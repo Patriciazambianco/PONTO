@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 from io import BytesIO
 from datetime import timedelta, time
+import io
 
 URL = "https://raw.githubusercontent.com/Patriciazambianco/PONTO/main/PONTO.xlsx"
 
@@ -70,30 +71,54 @@ def ranking_reincidentes(df):
 
     return ranking
 
+def to_excel(df):
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        df.to_excel(writer, index=False, sheet_name='Detalhes')
+        writer.save()
+    processed_data = output.getvalue()
+    return processed_data
+
+# Carregando e preparando dados
 df = carregar_dados()
 df = analisar_ponto(df)
 ranking = ranking_reincidentes(df)
 
 st.title("Análise de Ponto - Ranking Reincidentes")
 
+# Filtros
+st.sidebar.header("Filtros")
+
+nomes = ranking['Nome'].unique().tolist()
+nomes_selecionados = st.sidebar.multiselect("Selecione funcionários", nomes, default=nomes)
+
+mostrar_fora_turno = st.sidebar.checkbox("Mostrar só quem está fora do turno", value=False)
+mostrar_hora_extra = st.sidebar.checkbox("Mostrar só quem tem hora extra", value=False)
+
+# Aplicar filtros no ranking
+ranking_filtrado = ranking[ranking['Nome'].isin(nomes_selecionados)]
+
+if mostrar_fora_turno:
+    ranking_filtrado = ranking_filtrado[ranking_filtrado['Dias_fora_turno'] > 0]
+
+if mostrar_hora_extra:
+    ranking_filtrado = ranking_filtrado[ranking_filtrado['Total_horas_extra'] > 0]
+
 st.subheader("Ranking de reincidentes (fora do turno e horas extras)")
 
-# Mostrar o ranking com botão expansível para detalhes
-for i, row in ranking.iterrows():
+# Mostrar ranking com detalhes clicáveis
+for i, row in ranking_filtrado.iterrows():
     nome = row['Nome']
     dias_fora = int(row['Dias_fora_turno'])
     horas_extra = row['Total_horas_extra']
 
     with st.expander(f"{nome} - Dias fora do turno: {dias_fora}, Horas extras: {horas_extra:.2f}"):
-        # Filtrar os registros desse funcionário que estão fora do turno ou com hora extra
         detalhes = df[
             (df['Nome'] == nome) & ((df['Entrada_fora_turno']) | (df['Hora_extra_flag']))
         ].copy()
 
-        # Formatar as datas no padrão dd/mm/yyyy
         detalhes['Data_formatada'] = detalhes['Data'].dt.strftime('%d/%m/%Y')
 
-        # Mostrar uma tabela com as datas e horários do erro
         st.dataframe(detalhes[[
             'Data_formatada', 'Entrada 1', 'Saída 1', 'Turnos.ENTRADA', 'Turnos.SAIDA',
             'Entrada_fora_turno', 'Hora_extra_flag', 'Horas_extra'
@@ -108,6 +133,37 @@ for i, row in ranking.iterrows():
             'Horas_extra': 'Horas Extras (h)'
         }))
 
-# Mostrar total geral de horas extras
+# Gráfico barras com top reincidentes (dias fora + horas extras)
+import matplotlib.pyplot as plt
+
+ranking_filtrado['Score'] = ranking_filtrado['Dias_fora_turno'] + ranking_filtrado['Total_horas_extra']
+ranking_filtrado = ranking_filtrado.sort_values('Score', ascending=False)
+
+fig, ax = plt.subplots(figsize=(10, 6))
+ax.barh(ranking_filtrado['Nome'], ranking_filtrado['Score'], color='tomato')
+ax.invert_yaxis()
+ax.set_xlabel('Score (Dias fora + Horas extras)')
+ax.set_title('Ranking de reincidentes')
+
+st.pyplot(fig)
+
+# Botão para download dos detalhes filtrados
+detalhes_para_download = df[
+    df['Nome'].isin(ranking_filtrado['Nome'])
+    & ((df['Entrada_fora_turno']) | (df['Hora_extra_flag']))
+].copy()
+
+detalhes_para_download['Data'] = detalhes_para_download['Data'].dt.strftime('%d/%m/%Y')
+
+excel_bytes = to_excel(detalhes_para_download)
+
+st.download_button(
+    label="📥 Baixar detalhes dos reincidentes em Excel",
+    data=excel_bytes,
+    file_name='detalhes_reincidentes.xlsx',
+    mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+)
+
+# Total geral de horas extras
 total_horas_extras = df['Horas_extra'].sum()
 st.markdown(f"### Total de horas extras (considerando só acima de 15 minutos): **{total_horas_extras:.2f} horas**")
