@@ -91,13 +91,23 @@ with col1:
     st.subheader("🔥 Ranking Horas Extras (Total em Horas)")
     ranking_horas = df_filtrado[df_filtrado['Hora_extra']].groupby('Nome').agg({'Minutos_extras': 'sum'}).reset_index()
     ranking_horas['Horas_fmt'] = ranking_horas['Minutos_extras'].apply(minutes_to_hms)
-    fig = px.bar(ranking_horas.sort_values(by='Minutos_extras'), x='Minutos_extras', y='Nome', orientation='h', labels={'Minutos_extras':'Minutos'}, hover_data=['Horas_fmt'])
+    fig = px.bar(
+    ranking_horas.sort_values(by='Minutos_extras'),
+    x='Minutos_extras', y='Nome', orientation='h',
+    labels={'Minutos_extras': 'Minutos'},
+    hover_data=['Horas_fmt'],
+    template='plotly_white'
+), x='Minutos_extras', y='Nome', orientation='h', labels={'Minutos_extras':'Minutos'}, hover_data=['Horas_fmt'])
     st.plotly_chart(fig, use_container_width=True)
 
 with col2:
     st.subheader("⏰ Ranking Dias Fora do Turno")
     ranking_turno = df_filtrado[df_filtrado['Entrada_fora_turno']].groupby('Nome').size().reset_index(name='Dias')
-    fig2 = px.bar(ranking_turno.sort_values(by='Dias'), x='Dias', y='Nome', orientation='h')
+    fig2 = px.bar(
+    ranking_turno.sort_values(by='Dias'),
+    x='Dias', y='Nome', orientation='h',
+    template='plotly_white'
+), x='Dias', y='Nome', orientation='h')
     st.plotly_chart(fig2, use_container_width=True)
 
 # -------------------- DETALHAMENTO EXPANDIDO --------------------
@@ -105,12 +115,16 @@ st.markdown("---")
 st.subheader("📋 Detalhamento por Funcionário")
 
 infratores = df_filtrado[(df_filtrado['Hora_extra']) | (df_filtrado['Entrada_fora_turno'])]
-for nome in infratores['Nome'].unique():
+top_50 = infratores['Nome'].value_counts().head(50).index
+for nome in top_50:
     with st.expander(f"👤 {nome}"):
         pessoa = infratores[infratores['Nome'] == nome].copy()
         pessoa['Horas_fmt'] = pessoa['Minutos_extras'].apply(minutes_to_hms)
         pessoa['Status'] = pessoa.apply(lambda row: "Hora Extra" if row['Hora_extra'] else ("Fora do Turno" if row['Entrada_fora_turno'] else "OK"), axis=1)
-        st.dataframe(pessoa[['AnoMes', 'Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Horas_fmt', 'Status']].sort_values(by='Data_fmt'), use_container_width=True)
+        st.dataframe(
+            pessoa[['AnoMes', 'Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Horas_fmt', 'Status']].sort_values(by='Data_fmt'),
+            use_container_width=True
+        ), use_container_width=True)
 
 # -------------------- DOWNLOAD --------------------
 st.markdown("---")
