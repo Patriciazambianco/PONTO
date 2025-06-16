@@ -3,9 +3,8 @@ import pandas as pd
 import requests
 from io import BytesIO
 
-URL = "raw.githubusercontent.com/Patriciazambianco/PONTO/main/PONTO.xlsx"
-"
-"
+# URL do arquivo Excel no GitHub (atenção ao https://)
+URL = "https://raw.githubusercontent.com/Patriciazambianco/PONTO/main/PONTO.xlsx"
 
 @st.cache_data
 def carregar_dados():
@@ -27,10 +26,19 @@ def carregar_dados():
 
 df = carregar_dados()
 
-st.title("Análise de Ponto")
+st.title("📊 Análise de Ponto")
 
-st.write("Dados carregados com sucesso!")
+st.write("Dados carregados com sucesso! 🎉")
 st.dataframe(df)
 
-# Aqui você pode continuar seu código para análises, gráficos, filtros, etc.
+# Aqui você pode adicionar filtros, análises, gráficos, métricas, etc.
+# Exemplo simples de filtro por nome:
+nomes_unicos = df['Nome'].unique()
+nome_selecionado = st.selectbox("Selecione o funcionário:", nomes_unicos)
+
+df_filtrado = df[df['Nome'] == nome_selecionado]
+
+st.write(f"Registros para {nome_selecionado}:")
+st.dataframe(df_filtrado)
+
 
