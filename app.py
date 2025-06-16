@@ -91,9 +91,6 @@ with col1:
                   color_continuous_scale='Blues')
     st.plotly_chart(fig1, use_container_width=True)
 
-    csv1 = ranking_excesso.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Baixar Ranking Hora Extra", data=csv1, file_name="ranking_hora_extra.csv")
-
 with col2:
     st.subheader("⏰ Ranking - Fora do Turno")
     st.dataframe(ranking_turno.sort_values(by='Dias fora do turno', ascending=False), use_container_width=True)
@@ -104,18 +101,16 @@ with col2:
                   color_continuous_scale='Oranges')
     st.plotly_chart(fig2, use_container_width=True)
 
-    csv2 = ranking_turno.to_csv(index=False).encode('utf-8')
-    st.download_button("📥 Baixar Ranking Fora do Turno", data=csv2, file_name="ranking_fora_turno.csv")
-
 # DETALHAMENTO POR FUNCIONÁRIO
 st.markdown("---")
 st.subheader("🔎 Detalhamento por Funcionário")
 
-todos = sorted(set(ranking_excesso['Nome']).union(set(ranking_turno['Nome'])))
+todos = sorted(set(df['Nome'].dropna()))
 funcionario = st.selectbox("Escolha um funcionário para ver os dias de erro:", todos)
 
 df_func = df[df['Nome'] == funcionario].copy()
 
+# Filtrar apenas registros com erro
 df_func['Status'] = df_func.apply(
     lambda row: "Hora Extra" if row['Hora_extra'] else ("Fora do Turno" if row['Entrada_fora_turno'] else "OK"),
     axis=1
@@ -124,14 +119,18 @@ df_func['Status'] = df_func.apply(
 df_func = df_func[df_func['Status'] != "OK"]
 
 st.markdown(f"### 📅 Ocorrências de {funcionario}")
+
+# Adicionando cores por status
+def highlight_status(row):
+    color = '#fff'
+    if row['Status'] == 'Hora Extra':
+        color = '#d4edda'  # verde claro
+    elif row['Status'] == 'Fora do Turno':
+        color = '#f8d7da'  # vermelho claro
+    return ['background-color: {}'.format(color)]*len(row)
+
 st.dataframe(
-    df_func[['Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Status', 'Horas_extras']],
-    use_container_width=True,
-    column_config={
-        'Data_fmt': st.column_config.TextColumn("Data"),
-        'Entrada_fmt': st.column_config.TextColumn("Entrada"),
-        'Saida_fmt': st.column_config.TextColumn("Saída"),
-        'Status': st.column_config.TextColumn("Status"),
-        'Horas_extras': st.column_config.NumberColumn("Horas Extras")
-    }
+    df_func[['Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Status', 'Horas_extras']]
+    .style.apply(highlight_status, axis=1),
+    use_container_width=True
 )
