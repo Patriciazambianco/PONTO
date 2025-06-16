@@ -1,111 +1,121 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-from io import BytesIO
 import requests
-from datetime import datetime
+from io import BytesIO
+from datetime import datetime, timedelta
 
-st.set_page_config(layout="wide", page_title="Relatório de Ponto")
+st.set_page_config(layout="wide")
+st.title("📊 Relatório de Ponto – Análise de Horas Extras e Fora do Turno")
 
+# URL do Excel
 URL = "https://raw.githubusercontent.com/Patriciazambianco/PONTO/main/PONTO.xlsx"
 
 @st.cache_data
 def carregar_dados():
     response = requests.get(URL)
     response.raise_for_status()
-    df = pd.read_excel(BytesIO(response.content))
+    arquivo_excel = BytesIO(response.content)
+    df = pd.read_excel(arquivo_excel)
 
-    # Conversões seguras
     df['Data'] = pd.to_datetime(df['Data'], dayfirst=True, errors='coerce')
-    df = df[pd.notnull(df['Data'])]  # remove linhas com Data inválida
+    df['Entrada 1'] = pd.to_datetime(df['Entrada 1'], format='%H:%M:%S', errors='coerce').dt.time
+    df['Saída 1'] = pd.to_datetime(df['Saída 1'], format='%H:%M:%S', errors='coerce').dt.time
+    df['Turnos.ENTRADA'] = pd.to_datetime(df['Turnos.ENTRADA'], format='%H:%M', errors='coerce').dt.time
+    df['Turnos.SAIDA'] = pd.to_datetime(df['Turnos.SAIDA'], format='%H:%M', errors='coerce').dt.time
 
-    df['Entrada 1'] = pd.to_datetime(df['Entrada 1'], errors='coerce')
-    df['Saída 1'] = pd.to_datetime(df['Saída 1'], errors='coerce')
-    df['Turnos.ENTRADA'] = pd.to_datetime(df['Turnos.ENTRADA'], format='%H:%M', errors='coerce')
-    df['Turnos.SAIDA'] = pd.to_datetime(df['Turnos.SAIDA'], format='%H:%M', errors='coerce')
-
-    df['Ano-Mês'] = df['Data'].dt.to_period('M').astype(str)
     return df
 
-df = carregar_dados()
-
-# Visualização inicial
-st.subheader("👀 Pré-visualização dos dados carregados")
-st.dataframe(df.head(), use_container_width=True)
-
-# 🎯 Filtro por mês
-meses = df['Ano-Mês'].sort_values().unique()
-mes_selecionado = st.selectbox("🗓️ Selecione o mês", meses)
-df = df[df['Ano-Mês'] == mes_selecionado]
-
-# 🎯 Cálculo de horas extras
-def calcular_minutos(t1, t2):
-    if pd.isnull(t1) or pd.isnull(t2):
+# Função para calcular minutos de diferença
+def diff_minutes(t1, t2):
+    try:
+        dt1 = timedelta(hours=t1.hour, minutes=t1.minute, seconds=t1.second)
+        dt2 = timedelta(hours=t2.hour, minutes=t2.minute, seconds=t2.second)
+        return int((dt2 - dt1).total_seconds() / 60)
+    except:
         return None
-    return (t2 - t1).total_seconds() / 60
 
-df['Minutos Trabalhados'] = df.apply(lambda row: calcular_minutos(row['Entrada 1'], row['Saída 1']), axis=1)
+@st.cache_data
+def analisar_ponto(df):
+    df['Minutos_entrada'] = df['Entrada 1'].apply(lambda t: t.hour * 60 + t.minute if pd.notnull(t) else None)
+    df['Minutos_turno_entrada'] = df['Turnos.ENTRADA'].apply(lambda t: t.hour * 60 + t.minute if pd.notnull(t) else None)
+    df['Minutos_turno_saida'] = df['Turnos.SAIDA'].apply(lambda t: t.hour * 60 + t.minute if pd.notnull(t) else None)
 
-TURNO_PADRAO_MIN = 588  # 9h48min
-df['Hora Extra (min)'] = df['Minutos Trabalhados'] - TURNO_PADRAO_MIN
-df['Hora Extra (min)'] = df['Hora Extra (min)'].apply(lambda x: x if x and x > 15 else 0)
-df['Hora Extra (h)'] = df['Hora Extra (min)'] / 60
+    # Fora do turno = ±1 hora
+    df['Entrada_fora_turno'] = df.apply(
+        lambda row: (
+            row['Minutos_entrada'] is not None and 
+            row['Minutos_turno_entrada'] is not None and 
+            abs(row['Minutos_entrada'] - row['Minutos_turno_entrada']) > 60
+        ),
+        axis=1
+    )
 
-# 🎯 Cálculo fora do turno
-def fora_turno(row):
-    if pd.isnull(row['Entrada 1']) or pd.isnull(row['Turnos.ENTRADA']):
-        return False
-    diff = abs((row['Entrada 1'] - row['Turnos.ENTRADA']).total_seconds()) / 60
-    return diff > 60
+    # Horas extras = > 15 minutos além do turno
+    df['Minutos_trabalhados'] = df.apply(
+        lambda row: diff_minutes(row['Entrada 1'], row['Saída 1']) if row['Entrada 1'] and row['Saída 1'] else None,
+        axis=1
+    )
 
-df['Fora do Turno'] = df.apply(fora_turno, axis=1)
-df['Reincidente'] = df['Fora do Turno'] | (df['Hora Extra (min)'] > 0)
+    df['Minutos_extras'] = df.apply(
+        lambda row: row['Minutos_trabalhados'] - (row['Minutos_turno_saida'] - row['Minutos_turno_entrada'])
+        if row['Minutos_trabalhados'] and row['Minutos_turno_saida'] and row['Minutos_turno_entrada']
+        else 0,
+        axis=1
+    )
 
-# 🎯 Ranking
-ranking = df[df['Reincidente']].groupby('Nome').agg({
-    'Fora do Turno': 'sum',
-    'Hora Extra (h)': 'sum',
-    'Reincidente': 'count'
-}).rename(columns={'Reincidente': 'Total Ocorrências'}).sort_values(by='Total Ocorrências', ascending=False).reset_index()
+    df['Hora_extra'] = df['Minutos_extras'] > 15
 
-st.title("📊 Relatório de Ponto - Funcionários")
-st.markdown(f"### 🔎 Mês Selecionado: **{mes_selecionado}**")
+    # Formatação para exibição
+    df['Data_fmt'] = df['Data'].dt.strftime('%d/%m')
+    df['Entrada_fmt'] = df['Entrada 1'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
+    df['Saida_fmt'] = df['Saída 1'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
 
-# 🎯 Gráficos
+    return df
+
+# ---------------------------- RODANDO ----------------------------
+df = carregar_dados()
+df = analisar_ponto(df)
+
+# RANKING de reincidentes
+ranking_excesso = df[df['Hora_extra']].groupby('Nome').size().reset_index(name='Dias com hora extra')
+ranking_turno = df[df['Entrada_fora_turno']].groupby('Nome').size().reset_index(name='Dias fora do turno')
+
+# Mostrando rankings
 col1, col2 = st.columns(2)
 with col1:
-    st.subheader("🔝 Top Reincidentes")
-    fig = px.bar(ranking.head(10), x='Nome', y='Total Ocorrências', color='Fora do Turno',
-                 title="Top 10 (Fora do Turno e Hora Extra)",
-                 color_continuous_scale="OrRd")
-    st.plotly_chart(fig, use_container_width=True)
-
+    st.subheader("🚀 Ranking - Horas Extras")
+    st.dataframe(ranking_excesso.sort_values(by='Dias com hora extra', ascending=False), use_container_width=True)
 with col2:
-    st.subheader("📊 Distribuição Geral")
-    fig2 = px.pie(ranking, values='Total Ocorrências', names='Nome',
-                  title="Distribuição de Ocorrências")
-    st.plotly_chart(fig2, use_container_width=True)
+    st.subheader("⏰ Ranking - Fora do Turno")
+    st.dataframe(ranking_turno.sort_values(by='Dias fora do turno', ascending=False), use_container_width=True)
 
-# 🧾 Relatório Detalhado
-st.markdown("### 📋 Detalhamento por Funcionário")
-funcionario_clicado = st.selectbox("Selecione um funcionário para ver os detalhes", ranking['Nome'].unique())
+# Detalhamento por funcionário clicado
+st.markdown("---")
+st.subheader("🔎 Detalhamento por Funcionário")
 
-detalhes = df[(df['Nome'] == funcionario_clicado) & (df['Reincidente'])].copy()
+todos = sorted(set(ranking_excesso['Nome']).union(set(ranking_turno['Nome'])))
+funcionario = st.selectbox("Escolha um funcionário para ver os dias de irregularidade:", todos)
 
-# Formatando datas e horários
-detalhes['Data'] = detalhes['Data'].dt.strftime('%d/%m/%Y')
-for col in ['Entrada 1', 'Saída 1', 'Turnos.ENTRADA', 'Turnos.SAIDA']:
-    detalhes[col] = detalhes[col].dt.strftime('%H:%M')
+df_func = df[df['Nome'] == funcionario].copy()
 
-detalhes['Tipo de Ocorrência'] = detalhes.apply(
-    lambda row: "Ambos" if row['Fora do Turno'] and row['Hora Extra (min)'] > 0 else (
-        "Fora do Turno" if row['Fora do Turno'] else "Hora Extra"
-    ), axis=1
+df_func['Status'] = df_func.apply(
+    lambda row: "Hora Extra" if row['Hora_extra'] else ("Fora do Turno" if row['Entrada_fora_turno'] else "OK"),
+    axis=1
 )
 
+df_func = df_func[df_func['Status'] != "OK"]
+
+df_func['Horas_extras'] = df_func['Minutos_extras'].apply(lambda x: round(x/60, 2) if x > 0 else 0)
+
+# Colorido
 st.dataframe(
-    detalhes[['Data', 'Entrada 1', 'Saída 1', 'Turnos.ENTRADA', 'Turnos.SAIDA',
-              'Hora Extra (h)', 'Tipo de Ocorrência']],
-    use_container_width=True
+    df_func[['Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Status', 'Horas_extras']],
+    use_container_width=True,
+    column_config={
+        'Data_fmt': st.column_config.TextColumn("Data"),
+        'Entrada_fmt': st.column_config.TextColumn("Entrada"),
+        'Saida_fmt': st.column_config.TextColumn("Saída"),
+        'Status': st.column_config.TextColumn("Status"),
+        'Horas_extras': st.column_config.NumberColumn("Horas Extras")
+    }
 )
-
