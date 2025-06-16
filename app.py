@@ -2,31 +2,53 @@ import streamlit as st
 import pandas as pd
 import requests
 from io import BytesIO
-from datetime import datetime, time, timedelta
+from datetime import datetime, time
 
 URL = "https://raw.githubusercontent.com/Patriciazambianco/PONTO/main/PONTO.xlsx"
 
-# Função para converter horas robusta
-def to_time_safe(x):
-    if pd.isna(x):
+def convert_to_time(value):
+    if pd.isna(value):
         return None
-    if isinstance(x, pd.Timestamp) or isinstance(x, datetime):
-        return x.time()
-    if isinstance(x, float) or isinstance(x, int):
+    
+    # Se já for datetime.time
+    if isinstance(value, time):
+        return value
+    
+    # Se for datetime.datetime ou Timestamp
+    if isinstance(value, (datetime, pd.Timestamp)):
+        return value.time()
+    
+    # Se for float (excel geralmente converte hora em fração do dia)
+    if isinstance(value, (float, int)):
         try:
-            total_seconds = int(x * 24 * 3600)
-            hour = total_seconds // 3600
-            minute = (total_seconds % 3600) // 60
-            second = total_seconds % 60
-            return time(hour, minute, second)
+            total_seconds = int(value * 24 * 3600)
+            hours = total_seconds // 3600
+            minutes = (total_seconds % 3600) // 60
+            seconds = total_seconds % 60
+            return time(hours, minutes, seconds)
         except:
             return None
-    if isinstance(x, str):
-        for fmt in ("%H:%M:%S", "%H:%M", "%H.%M", "%H-%M", "%H:%M:%S.%f"):
+    
+    # Se for string, tenta vários formatos comuns
+    if isinstance(value, str):
+        value = value.strip()
+        formatos = ['%H:%M:%S', '%H:%M', '%H.%M', '%H-%M', '%H%M']
+        for fmt in formatos:
             try:
-                return datetime.strptime(x.strip(), fmt).time()
+                return datetime.strptime(value, fmt).time()
             except:
                 continue
+        # Se falhar, tenta converter string numérica (ex: "0.75" = 18:00)
+        try:
+            num = float(value)
+            total_seconds = int(num * 24 * 3600)
+            hours = total_seconds // 3600
+            minutes = (total_seconds % 3600) // 60
+            seconds = total_seconds % 60
+            return time(hours, minutes, seconds)
+        except:
+            return None
+
     return None
 
 @st.cache_data
@@ -36,18 +58,24 @@ def carregar_dados():
     arquivo_excel = BytesIO(response.content)
     df = pd.read_excel(arquivo_excel)
 
-    # Converter datas
     df['Data'] = pd.to_datetime(df['Data'], dayfirst=True, errors='coerce')
 
-    # Converter colunas de hora usando a função robusta
+    # Converte as colunas de hora usando nossa função customizada
     for col in ['Entrada 1', 'Saída 1', 'Turnos.ENTRADA', 'Turnos.SAIDA']:
-        df[col] = df[col].apply(to_time_safe)
+        df[col] = df[col].apply(convert_to_time)
+
+    # DEBUG - Mostra valores únicos para ver o que pegou
+    st.write("Valores únicos Entrada 1:", df['Entrada 1'].dropna().unique())
+    st.write("Valores únicos Saída 1:", df['Saída 1'].dropna().unique())
 
     return df
 
 df = carregar_dados()
 
 st.title("Análise de Ponto")
+
+st.dataframe(df)
+
 
 # Mostrar dados carregados
 st.write("Dados carregados:")
