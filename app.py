@@ -1,10 +1,8 @@
 import pandas as pd
 import streamlit as st
 
-# 📥 LINK DIRETO DO EXCEL NO GITHUB
-URL = "https://raw.githubusercontent.com/seu_usuario/relatorio-ponto/main/registro_ponto.xlsx"
+URL = "https://raw.githubusercontent.com/Patriciazambianco/PONTO/main/registro_ponto.xlsx"
 
-# Leitura do Excel hospedado no GitHub
 @st.cache_data
 def carregar_dados():
     df = pd.read_excel(URL)
@@ -17,7 +15,6 @@ def carregar_dados():
 
 df = carregar_dados()
 
-# Verificações de irregularidade
 def verificar_irregularidade(row):
     if pd.isnull(row['Entrada 1']) or pd.isnull(row['Saída 1']):
         return "FALTA"
@@ -34,7 +31,6 @@ def verificar_irregularidade(row):
 
 df['IRREGULARIDADE'] = df.apply(verificar_irregularidade, axis=1)
 
-# Sidebar com filtros
 st.sidebar.header("Filtros")
 funcionario = st.sidebar.multiselect("Funcionário", df["Nome"].unique())
 coordenador = st.sidebar.multiselect("Coordenador", df["MICROSIGA.COORDENADOR_IMEDIATO"].unique())
@@ -46,19 +42,11 @@ if coordenador:
     filtro = filtro[filtro["MICROSIGA.COORDENADOR_IMEDIATO"].isin(coordenador)]
 
 st.title("📋 Relatório de Ponto - Análise Completa")
-
-# Métricas rápidas
 st.metric("Total de Registros", len(filtro))
 st.metric("Dias com Irregularidades", filtro[filtro['IRREGULARIDADE'] != "DENTRO DO HORÁRIO"].shape[0])
 st.metric("Faltas", filtro[filtro['IRREGULARIDADE'].str.contains("FALTA", na=False)].shape[0])
-
-# Tabela
 st.subheader("📄 Tabela com Irregularidades")
 st.dataframe(filtro[['Nome', 'Data', 'Entrada 1', 'Saída 1', 'Turnos.ENTRADA', 'Turnos.SAIDA', 'IRREGULARIDADE']])
-
-# Gráfico por tipo
 st.subheader("📊 Irregularidades por Tipo")
 st.bar_chart(filtro['IRREGULARIDADE'].value_counts())
-
-# Download
 st.download_button("📥 Baixar Dados Filtrados", data=filtro.to_csv(index=False).encode(), file_name="relatorio_filtrado.csv")
