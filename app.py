@@ -2,171 +2,200 @@ import streamlit as st
 import pandas as pd
 import requests
 from io import BytesIO
-from datetime import datetime, timedelta
+from datetime import timedelta
 import plotly.express as px
-import openpyxl
-import io
 
+# URL do arquivo Excel no GitHub raw
 URL = "https://raw.githubusercontent.com/Patriciazambianco/PONTO/main/PONTO.xlsx"
-
-# --- Funções auxiliares ---
-
-def diff_minutes(t1, t2):
-    if pd.isna(t1) or pd.isna(t2):
-        return None
-    dt1 = timedelta(hours=t1.hour, minutes=t1.minute, seconds=t1.second)
-    dt2 = timedelta(hours=t2.hour, minutes=t2.minute, seconds=t2.second)
-    diff = dt2 - dt1
-    return diff.total_seconds() / 60
-
-def analisar_ponto(df):
-    # Tratar horários
-    df['Entrada 1'] = pd.to_datetime(df['Entrada 1'], errors='coerce').dt.time
-    df['Saída 1'] = pd.to_datetime(df['Saída 1'], errors='coerce').dt.time
-    df['Turnos.ENTRADA'] = pd.to_datetime(df['Turnos.ENTRADA'], errors='coerce').dt.time
-    df['Turnos.SAIDA'] = pd.to_datetime(df['Turnos.SAIDA'], errors='coerce').dt.time
-
-    # Calcular minutos trabalhados e do turno
-    df['Minutos_trabalhados'] = df.apply(
-        lambda r: diff_minutes(r['Entrada 1'], r['Saída 1']) if r['Entrada 1'] and r['Saída 1'] else None,
-        axis=1)
-    df['Minutos_turno'] = df.apply(
-        lambda r: diff_minutes(r['Turnos.ENTRADA'], r['Turnos.SAIDA']) if r['Turnos.ENTRADA'] and r['Turnos.SAIDA'] else None,
-        axis=1)
-
-    # Fora do turno: entrada com diferença maior que 1 hora para mais ou menos do turno
-    def fora_do_turno(entrada_real, entrada_turno):
-        if entrada_real is None or entrada_turno is None:
-            return False
-        diff = abs(diff_minutes(entrada_real, entrada_turno))
-        return diff > 60
-
-    df['Fora_do_turno'] = df.apply(lambda r: fora_do_turno(r['Entrada 1'], r['Turnos.ENTRADA']), axis=1)
-
-    # Hora extra (em minutos) só conta se passar de 15 min
-    df['Hora_extra'] = df.apply(
-        lambda r: max(r['Minutos_trabalhados'] - r['Minutos_turno'], 0) if pd.notnull(r['Minutos_trabalhados']) and pd.notnull(r['Minutos_turno']) else 0,
-        axis=1)
-    df['Hora_extra'] = df['Hora_extra'].apply(lambda x: x if x > 15 else 0)
-    df['Hora_extra_horas'] = (df['Hora_extra'] / 60).round(2)
-
-    # Reincidências por funcionário
-    df['Reincidente_fora_turno'] = df.groupby('Funcionario')['Fora_do_turno'].transform('sum')
-    df['Reincidente_hora_extra'] = df.groupby('Funcionario')['Hora_extra'].transform(lambda x: (x > 0).sum())
-
-    return df
 
 @st.cache_data
 def carregar_dados():
     response = requests.get(URL)
     response.raise_for_status()
-    arquivo = BytesIO(response.content)
-    df = pd.read_excel(arquivo)
+    arquivo_excel = BytesIO(response.content)
+    df = pd.read_excel(arquivo_excel)
+
+    # Ajusta formatos de data e hora
     df['Data'] = pd.to_datetime(df['Data'], dayfirst=True)
+    df['Entrada 1'] = pd.to_datetime(df['Entrada 1'], errors='coerce').dt.time
+    df['Saída 1'] = pd.to_datetime(df['Saída 1'], errors='coerce').dt.time
+    df['Turnos.ENTRADA'] = pd.to_datetime(df['Turnos.ENTRADA'], errors='coerce').dt.time
+    df['Turnos.SAIDA'] = pd.to_datetime(df['Turnos.SAIDA'], errors='coerce').dt.time
+
     return df
 
-def gerar_ranking(df):
-    ranking = df.groupby('Funcionario').agg({
-        'Fora_do_turno': 'sum',
-        'Hora_extra': lambda x: (x > 0).sum(),
-        'Hora_extra_horas': 'sum'
-    }).reset_index()
+def diff_minutes(t1, t2):
+    if pd.isna(t1) or pd.isna(t2) or t1 is None or t2 is None:
+        return 0
+    dt1 = timedelta(hours=t1.hour, minutes=t1.minute, seconds=t1.second)
+    dt2 = timedelta(hours=t2.hour, minutes=t2.minute, seconds=t2.second)
+    diff = dt2 - dt1
+    return diff.total_seconds() / 60
 
-    ranking = ranking.rename(columns={
-        'Fora_do_turno': 'Qtd Fora do Turno',
-        'Hora_extra': 'Qtd Dias Hora Extra',
-        'Hora_extra_horas': 'Total de Horas Extras'
-    })
+def fora_do_turno(entrada_real, entrada_turno):
+    if entrada_real is None or entrada_turno is None:
+        return False
+    diff = abs(diff_minutes(entrada_real, entrada_turno))
+    return diff > 60  # fora do turno se mais que 1h de diferença
 
-    ranking = ranking.sort_values(by=['Qtd Fora do Turno', 'Qtd Dias Hora Extra', 'Total de Horas Extras'], ascending=False)
+def calcula_hora_extra(entrada_real, saida_real, entrada_turno, saida_turno):
+    if None in (entrada_real, saida_real, entrada_turno, saida_turno):
+        return 0
+    minutos_trabalhados = diff_minutes(entrada_real, saida_real)
+    minutos_turno = diff_minutes(entrada_turno, saida_turno)
+    extra = minutos_trabalhados - minutos_turno
+    return extra if extra > 15 else 0  # só conta hora extra acima de 15 minutos
 
-    # Medalhas (ouro, prata, bronze) para fora do turno (exemplo simples)
-    ranking['Medalha'] = ''
-    if len(ranking) >= 1:
-        ranking.loc[ranking.index[0], 'Medalha'] = '🥇'
-    if len(ranking) >= 2:
-        ranking.loc[ranking.index[1], 'Medalha'] = '🥈'
-    if len(ranking) >= 3:
-        ranking.loc[ranking.index[2], 'Medalha'] = '🥉'
+def analisar_ponto(df):
+    # Aplica flags
+    df['Fora_do_turno'] = df.apply(lambda r: fora_do_turno(r['Entrada 1'], r['Turnos.ENTRADA']), axis=1)
+    df['Hora_extra'] = df.apply(
+        lambda r: calcula_hora_extra(r['Entrada 1'], r['Saída 1'], r['Turnos.ENTRADA'], r['Turnos.SAIDA']),
+        axis=1
+    )
+    df['Hora_extra_h'] = df['Hora_extra'] / 60  # em horas
 
-    return ranking
+    # Reincidência por funcionário (contagem de dias fora do turno e hora extra)
+    reincidentes = df.groupby('Funcionario').agg(
+        fora_do_turno_count=('Fora_do_turno', 'sum'),
+        hora_extra_count=('Hora_extra', lambda x: (x > 0).sum()),
+        total_hora_extra=('Hora_extra_h', 'sum')
+    ).reset_index()
 
-def filtrar_periodo(df, periodo):
-    hoje = datetime.now()
-    if periodo == "Últimos 30 dias":
-        inicio = hoje - timedelta(days=30)
-    elif periodo == "Mês Atual":
-        inicio = datetime(hoje.year, hoje.month, 1)
+    # Só quem teve algum tipo de erro
+    reincidentes = reincidentes[(reincidentes['fora_do_turno_count'] > 0) | (reincidentes['hora_extra_count'] > 0)]
+
+    # Ordena pelo total de reincidências (fora do turno + hora extra count)
+    reincidentes['total_reincidencias'] = reincidentes['fora_do_turno_count'] + reincidentes['hora_extra_count']
+    reincidentes = reincidentes.sort_values(by='total_reincidencias', ascending=False)
+
+    return df, reincidentes
+
+def medalha(pos):
+    if pos == 0:
+        return "🥇"
+    elif pos == 1:
+        return "🥈"
+    elif pos == 2:
+        return "🥉"
     else:
-        inicio = df['Data'].min()
-    df_filtrado = df[df['Data'] >= inicio]
-    return df_filtrado
+        return ""
 
-def exportar_excel(df):
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Relatório Ponto')
-    return output.getvalue()
-
-# --- App Streamlit ---
+# --- Código principal Streamlit ---
 
 st.set_page_config(page_title="Análise de Ponto", layout="wide")
 
-st.title("📊 Análise de Ponto")
+st.title("📊 Análise de Ponto com Ranking de Reincidentes")
 
-# Filtro de período
-periodo = st.selectbox("Selecione o período", ["Últimos 30 dias", "Mês Atual", "Desde o início"])
-
-# Carregar dados e filtrar
 df = carregar_dados()
-df = filtrar_periodo(df, periodo)
+df, reincidentes = analisar_ponto(df)
 
-# Analisar ponto
-df = analisar_ponto(df)
+# Filtro por período
+opcoes_periodo = {
+    "Últimos 30 dias": 30,
+    "Mês Atual": None,
+    "Tudo": None
+}
+
+periodo = st.selectbox("Selecione o período:", list(opcoes_periodo.keys()))
+
+if periodo == "Últimos 30 dias":
+    df_periodo = df[df['Data'] >= (pd.Timestamp.today() - pd.Timedelta(days=30))]
+elif periodo == "Mês Atual":
+    hoje = pd.Timestamp.today()
+    df_periodo = df[(df['Data'].dt.year == hoje.year) & (df['Data'].dt.month == hoje.month)]
+else:
+    df_periodo = df.copy()
+
+# Atualiza reincidentes pelo período filtrado
+_, reincidentes_periodo = analisar_ponto(df_periodo)
 
 # Ranking reincidentes
-ranking = gerar_ranking(df)
+st.subheader("🏆 Ranking de Reincidentes")
+reincidentes_periodo = reincidentes_periodo.reset_index(drop=True)
+reincidentes_periodo.index.name = "Posição"
+reincidentes_periodo['Medalha'] = reincidentes_periodo.index.map(medalha)
 
-col1, col2 = st.columns([3, 5])
+# Colorindo linhas com st.dataframe não tem suporte nativo, usa st.table com styler
+def highlight_medal(s):
+    color = ""
+    if s.name == 0:
+        color = "#FFD700"  # Ouro - dourado
+    elif s.name == 1:
+        color = "#C0C0C0"  # Prata
+    elif s.name == 2:
+        color = "#CD7F32"  # Bronze
+    return ['background-color: {}'.format(color) if color else '' for _ in s]
 
-with col1:
-    st.subheader("🏆 Ranking de Reincidentes")
-    st.dataframe(ranking.style.applymap(lambda v: 'background-color: #FFD700' if '🥇' in str(v) else
-                                               '#C0C0C0' if '🥈' in str(v) else
-                                               '#CD7F32' if '🥉' in str(v) else '',
-                                      subset=['Medalha']))
+ranking_display = reincidentes_periodo[['Medalha', 'Funcionario', 'fora_do_turno_count', 'hora_extra_count', 'total_hora_extra']]
+ranking_display = ranking_display.rename(columns={
+    'Funcionario': 'Funcionário',
+    'fora_do_turno_count': 'Fora do Turno (dias)',
+    'hora_extra_count': 'Dias com Hora Extra',
+    'total_hora_extra': 'Horas Extras (h)'
+})
 
-with col2:
-    st.subheader("📈 Gráfico Hora Extra por Funcionário")
-    fig = px.bar(ranking, x='Funcionario', y='Total de Horas Extras',
-                 color='Total de Horas Extras', color_continuous_scale='greens',
-                 labels={'Total de Horas Extras': 'Horas Extras'},
-                 title="Horas Extras por Funcionário")
-    st.plotly_chart(fig, use_container_width=True)
+st.table(ranking_display.style.apply(highlight_medal, axis=1))
 
-# Detalhes ao clicar no nome
-st.markdown("### Detalhes por Funcionário")
+# Relatório detalhado ao clicar no funcionário (simula com selectbox)
+st.subheader("📅 Detalhes do Funcionário")
 
-funcionario_selecionado = st.selectbox("Selecione o funcionário", ranking['Funcionario'].unique())
+func = st.selectbox("Selecione o funcionário para detalhes:", reincidentes_periodo['Funcionario'].tolist())
 
-detalhes = df[df['Funcionario'] == funcionario_selecionado][
-    ['Data', 'Entrada 1', 'Saída 1', 'Turnos.ENTRADA', 'Turnos.SAIDA', 'Fora_do_turno', 'Hora_extra_horas']
-]
+if func:
+    df_func = df_periodo[df_periodo['Funcionario'] == func].copy()
 
-# Formatar data e horários
-detalhes['Data'] = detalhes['Data'].dt.strftime('%d/%m/%Y')
-detalhes['Entrada 1'] = detalhes['Entrada 1'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
-detalhes['Saída 1'] = detalhes['Saída 1'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
-detalhes['Turnos.ENTRADA'] = detalhes['Turnos.ENTRADA'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
-detalhes['Turnos.SAIDA'] = detalhes['Turnos.SAIDA'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
+    df_func['Data'] = df_func['Data'].dt.strftime('%d/%m/%Y')
+    df_func['Entrada 1'] = df_func['Entrada 1'].apply(lambda x: x.strftime('%H:%M:%S') if pd.notna(x) else '')
+    df_func['Saída 1'] = df_func['Saída 1'].apply(lambda x: x.strftime('%H:%M:%S') if pd.notna(x) else '')
+    df_func['Turnos.ENTRADA'] = df_func['Turnos.ENTRADA'].apply(lambda x: x.strftime('%H:%M:%S') if pd.notna(x) else '')
+    df_func['Turnos.SAIDA'] = df_func['Turnos.SAIDA'].apply(lambda x: x.strftime('%H:%M:%S') if pd.notna(x) else '')
 
-st.dataframe(detalhes.style.applymap(lambda v: 'background-color: #FFA07A' if isinstance(v, bool) and v else '', subset=['Fora_do_turno']))
+    # Mostra apenas registros fora do turno ou com hora extra
+    df_func = df_func[(df_func['Fora_do_turno']) | (df_func['Hora_extra'] > 0)]
 
-# Botão para baixar relatório
-st.markdown("---")
-st.download_button(
-    label="📥 Baixar relatório Excel",
-    data=exportar_excel(df),
-    file_name=f"relatorio_ponto_{datetime.now().strftime('%Y%m%d')}.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
+    st.dataframe(df_func[['Data', 'Entrada 1', 'Saída 1', 'Turnos.ENTRADA', 'Turnos.SAIDA', 'Fora_do_turno', 'Hora_extra_h']])
+
+# Gráfico interativo: total de fora do turno e hora extra por dia
+st.subheader("📈 Gráfico de ocorrências por dia")
+
+df_dia = df_periodo.groupby('Data').agg(
+    fora_do_turno_total=('Fora_do_turno', 'sum'),
+    hora_extra_total=('Hora_extra_h', 'sum')
+).reset_index()
+
+fig = px.bar(df_dia.melt(id_vars='Data', value_vars=['fora_do_turno_total', 'hora_extra_total']),
+             x='Data', y='value', color='variable',
+             labels={'value': 'Quantidade', 'variable': 'Tipo', 'Data': 'Data'},
+             title="Ocorrências de Fora do Turno e Hora Extra por Dia",
+             color_discrete_map={
+                'fora_do_turno_total': 'orange',
+                'hora_extra_total': 'green'
+             })
+
+st.plotly_chart(fig, use_container_width=True)
+
+# Botão para baixar relatório em Excel
+from io import BytesIO
+
+def to_excel(df):
+    output = BytesIO()
+    writer = pd.ExcelWriter(output, engine='xlsxwriter')
+    df.to_excel(writer, index=False, sheet_name='Relatório')
+    writer.save()
+    processed_data = output.getvalue()
+    return processed_data
+
+st.subheader("📥 Download do relatório filtrado")
+
+dados_download = df_periodo.copy()
+dados_download['Data'] = dados_download['Data'].dt.strftime('%d/%m/%Y')
+dados_download['Entrada 1'] = dados_download['Entrada 1'].apply(lambda x: x.strftime('%H:%M:%S') if pd.notna(x) else '')
+dados_download['Saída 1'] = dados_download['Saída 1'].apply(lambda x: x.strftime('%H:%M:%S') if pd.notna(x) else '')
+dados_download['Turnos.ENTRADA'] = dados_download['Turnos.ENTRADA'].apply(lambda x: x.strftime('%H:%M:%S') if pd.notna(x) else '')
+dados_download['Turnos.SAIDA'] = dados_download['Turnos.SAIDA'].apply(lambda x: x.strftime('%H:%M:%S') if pd.notna(x) else '')
+
+excel_data = to_excel(dados_download)
+
+st.download_button(label='⬇️ Baixar Excel', data=excel_data, file_name='relatorio_ponto.xlsx', mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
