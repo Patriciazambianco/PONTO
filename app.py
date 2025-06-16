@@ -31,7 +31,6 @@ def carregar_dados():
     for col in ['Entrada 1', 'Saída 1', 'Turnos.ENTRADA', 'Turnos.SAIDA']:
         df[col] = pd.to_datetime(df[col], errors='coerce').dt.time
 
-    st.write("Colunas disponíveis:", df.columns.tolist())
     return df
 
 def diff_minutes(t1, t2):
@@ -45,7 +44,7 @@ def fora_do_turno(entrada_real, entrada_turno):
     if pd.isna(entrada_real) or pd.isna(entrada_turno):
         return False
     diff = diff_minutes(entrada_real, entrada_turno)
-    return diff > 60  # mais de 1 hora de diferença
+    return diff > 60
 
 def calc_hora_extra(entrada_real, saida_real, entrada_turno, saida_turno):
     if pd.isna(entrada_real) or pd.isna(saida_real) or pd.isna(entrada_turno) or pd.isna(saida_turno):
@@ -57,7 +56,7 @@ def calc_hora_extra(entrada_real, saida_real, entrada_turno, saida_turno):
     minutos_trabalhados = (dt_saida_real - dt_entrada_real).total_seconds() / 60
     minutos_turno = (dt_saida_turno - dt_entrada_turno).total_seconds() / 60
     extra = minutos_trabalhados - minutos_turno
-    return extra if extra > 15 else 0  # só conta hora extra se > 15 minutos
+    return extra if extra > 15 else 0
 
 def analisar_ponto(df):
     df['Fora_do_turno'] = df.apply(lambda r: fora_do_turno(r['Entrada 1'], r['Turnos.ENTRADA']), axis=1)
@@ -66,7 +65,7 @@ def analisar_ponto(df):
     df['fora_do_turno_int'] = df['Fora_do_turno'].astype(int)
     df['hora_extra_int'] = df['Hora_extra'].apply(lambda x: 1 if x > 0 else 0)
 
-    reincidentes = df.groupby('Funcionario').agg(
+    reincidentes = df.groupby('Nome').agg(
         fora_do_turno_total=('fora_do_turno_int', 'sum'),
         hora_extra_total=('hora_extra_int', 'sum'),
         horas_extras_sum=('Hora_extra', 'sum')
@@ -77,7 +76,10 @@ def analisar_ponto(df):
     reincidentes = reincidentes.sort_values(by='total_erros', ascending=False).reset_index(drop=True)
 
     def medalha(i):
-        return ['🥇', '🥈', '🥉'][i] if i < 3 else ''
+        if i == 0: return '🥇'
+        elif i == 1: return '🥈'
+        elif i == 2: return '🥉'
+        else: return ''
 
     reincidentes['Medalha'] = [medalha(i) for i in range(len(reincidentes))]
 
@@ -99,12 +101,13 @@ def filtrar_por_periodo(df, periodo):
 
 def exportar_excel(df):
     output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        df.to_excel(writer, index=False, sheet_name='Relatório')
+    writer = pd.ExcelWriter(output, engine='xlsxwriter')
+    df.to_excel(writer, index=False, sheet_name='Relatório')
+    writer.save()
     processed_data = output.getvalue()
     return processed_data
 
-# --- Início do app Streamlit ---
+# --- Streamlit app ---
 
 st.set_page_config(page_title="Análise de Ponto", layout="wide")
 
@@ -122,7 +125,7 @@ else:
 df_analisado, reincidentes = analisar_ponto(df_filtrado)
 
 st.subheader("🏆 Ranking de Reincidentes")
-reincidentes_display = reincidentes[['Medalha', 'Funcionario', 'fora_do_turno_total', 'hora_extra_total', 'horas_extras_sum']]
+reincidentes_display = reincidentes[['Medalha', 'Nome', 'fora_do_turno_total', 'hora_extra_total', 'horas_extras_sum']]
 reincidentes_display.columns = ['🏅', 'Funcionário', 'Fora do Turno', 'Hora Extra (ocorrências)', 'Total Horas Extras']
 
 def color_ranking(row):
@@ -132,10 +135,10 @@ def color_ranking(row):
 
 st.dataframe(reincidentes_display.style.apply(color_ranking, axis=1), use_container_width=True)
 
-func_selecionado = st.selectbox("Ver detalhes do funcionário:", reincidentes['Funcionario'])
+func_selecionado = st.selectbox("Ver detalhes do funcionário:", reincidentes['Nome'])
 
 if func_selecionado:
-    detalhes = df_analisado[(df_analisado['Funcionario'] == func_selecionado) & ((df_analisado['Fora_do_turno']) | (df_analisado['Hora_extra'] > 0))]
+    detalhes = df_analisado[(df_analisado['Nome'] == func_selecionado) & ((df_analisado['Fora_do_turno']) | (df_analisado['Hora_extra'] > 0))]
     detalhes = detalhes[['Data', 'Entrada 1', 'Saída 1', 'Turnos.ENTRADA', 'Turnos.SAIDA', 'Fora_do_turno', 'Hora_extra']]
 
     detalhes['Data'] = detalhes['Data'].dt.strftime('%d/%m/%Y')
@@ -149,9 +152,9 @@ st.subheader("📈 Ocorrências por funcionário")
 
 fig = px.bar(
     reincidentes,
-    x='Funcionario',
+    x='Nome',
     y=['fora_do_turno_total', 'hora_extra_total'],
-    labels={'value': 'Ocorrências', 'Funcionario': 'Funcionário', 'variable': 'Tipo de Ocorrência'},
+    labels={'value': 'Ocorrências', 'Nome': 'Funcionário', 'variable': 'Tipo de Ocorrência'},
     title='Fora do turno vs Hora extra',
     color_discrete_map=COLOR_MAP
 )
@@ -166,3 +169,7 @@ st.download_button(
     mime='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 )
 
+
+    
+     
+   
