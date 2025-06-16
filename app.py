@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import requests
 from io import BytesIO
-from datetime import datetime, timedelta, time
+from datetime import timedelta, time
 
 URL = "https://raw.githubusercontent.com/Patriciazambianco/PONTO/main/PONTO.xlsx"
 
@@ -16,17 +16,19 @@ def carregar_dados():
     # Converter colunas de data
     df['Data'] = pd.to_datetime(df['Data'], dayfirst=True, errors='coerce')
 
-    # Converter colunas de horário com pd.to_datetime, mantendo só o time
+    # Converter colunas de horário para time
     for col in ['Entrada 1', 'Saída 1', 'Turnos.ENTRADA', 'Turnos.SAIDA']:
         df[col] = pd.to_datetime(df[col].astype(str), errors='coerce').dt.time
 
     return df
 
 def time_to_minutes(t):
-    return t.hour * 60 + t.minute if t else None
+    if isinstance(t, time):
+        return t.hour * 60 + t.minute
+    return None
 
 def diff_minutes(t1, t2):
-    if t1 and t2:
+    if isinstance(t1, time) and isinstance(t2, time):
         dt1 = timedelta(hours=t1.hour, minutes=t1.minute, seconds=t1.second)
         dt2 = timedelta(hours=t2.hour, minutes=t2.minute, seconds=t2.second)
         delta = dt2 - dt1
@@ -37,24 +39,19 @@ def analisar_ponto(df):
     df['Minutos_entrada'] = df['Entrada 1'].apply(time_to_minutes)
     df['Minutos_turno_entrada'] = df['Turnos.ENTRADA'].apply(time_to_minutes)
     df['Entrada_fora_turno'] = df.apply(
-        lambda row: row['Minutos_entrada'] > (row['Minutos_turno_entrada'] + 60) 
-        if row['Minutos_entrada'] is not None and row['Minutos_turno_entrada'] is not None else False,
+        lambda row: (row['Minutos_entrada'] is not None and row['Minutos_turno_entrada'] is not None and
+                     row['Minutos_entrada'] > row['Minutos_turno_entrada'] + 60),
         axis=1
     )
 
-    df['Minutos_trabalhados'] = df.apply(
-        lambda row: diff_minutes(row['Entrada 1'], row['Saída 1']) if row['Entrada 1'] and row['Saída 1'] else None,
-        axis=1
-    )
+    df['Minutos_trabalhados'] = df.apply(lambda row: diff_minutes(row['Entrada 1'], row['Saída 1']), axis=1)
 
-    df['Minutos_turno'] = df.apply(
-        lambda row: diff_minutes(row['Turnos.ENTRADA'], row['Turnos.SAIDA']) if row['Turnos.ENTRADA'] and row['Turnos.SAIDA'] else None,
-        axis=1
-    )
+    df['Minutos_turno'] = df.apply(lambda row: diff_minutes(row['Turnos.ENTRADA'], row['Turnos.SAIDA']), axis=1)
 
     df['Minutos_extra'] = df.apply(
-        lambda row: (row['Minutos_trabalhados'] - row['Minutos_turno']) 
-        if row['Minutos_trabalhados'] is not None and row['Minutos_turno'] is not None and (row['Minutos_trabalhados'] - row['Minutos_turno'] > 15) else 0,
+        lambda row: (row['Minutos_trabalhados'] - row['Minutos_turno'])
+        if row['Minutos_trabalhados'] is not None and row['Minutos_turno'] is not None and (row['Minutos_trabalhados'] - row['Minutos_turno'] > 15)
+        else 0,
         axis=1
     )
 
