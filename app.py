@@ -8,6 +8,8 @@ import io
 
 # URL do arquivo Excel no GitHub raw
 URL = "https://raw.githubusercontent.com/Patriciazambianco/PONTO/main/PONTO.xlsx"
+st.write("Colunas disponíveis:", df.columns.tolist())
+
 
 # Paleta de cores personalizada
 COLOR_MAP = {
