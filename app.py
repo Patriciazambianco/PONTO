@@ -1,24 +1,27 @@
 import streamlit as st
 import pandas as pd
 import requests
-import plotly.express as px
 from io import BytesIO
 from datetime import datetime, timedelta
+import plotly.express as px
 
 st.set_page_config(layout="wide", page_title="📊 Relatório de Ponto")
 
-# -------------------- FUNÇÕES --------------------
+URL = "https://raw.githubusercontent.com/Patriciazambianco/PONTO/main/PONTO.xlsx"
+
 @st.cache_data
 def carregar_dados():
-    url = "https://raw.githubusercontent.com/Patriciazambianco/PONTO/main/PONTO.xlsx"
-    response = requests.get(url)
+    response = requests.get(URL)
+    response.raise_for_status()
     arquivo_excel = BytesIO(response.content)
     df = pd.read_excel(arquivo_excel)
+
     df['Data'] = pd.to_datetime(df['Data'], dayfirst=True, errors='coerce')
     df['Entrada 1'] = pd.to_datetime(df['Entrada 1'], format='%H:%M:%S', errors='coerce').dt.time
     df['Saída 1'] = pd.to_datetime(df['Saída 1'], format='%H:%M:%S', errors='coerce').dt.time
     df['Turnos.ENTRADA'] = pd.to_datetime(df['Turnos.ENTRADA'], format='%H:%M', errors='coerce').dt.time
     df['Turnos.SAIDA'] = pd.to_datetime(df['Turnos.SAIDA'], format='%H:%M', errors='coerce').dt.time
+
     return df
 
 def diff_minutes(t1, t2):
@@ -29,18 +32,20 @@ def diff_minutes(t1, t2):
     except:
         return None
 
-def minutes_to_hms(minutes):
-    if pd.isna(minutes) or minutes is None or minutes <= 0:
+def minutes_to_hms(minutos):
+    if minutos is None or minutos <= 0:
         return "00:00:00"
-    h = int(minutes) // 60
-    m = int(minutes) % 60
+    h = minutos // 60
+    m = minutos % 60
     return f"{h:02d}:{m:02d}:00"
 
+@st.cache_data
 def analisar_ponto(df):
     df['Minutos_entrada'] = df['Entrada 1'].apply(lambda t: t.hour * 60 + t.minute if pd.notnull(t) else None)
     df['Minutos_turno_entrada'] = df['Turnos.ENTRADA'].apply(lambda t: t.hour * 60 + t.minute if pd.notnull(t) else None)
     df['Minutos_turno_saida'] = df['Turnos.SAIDA'].apply(lambda t: t.hour * 60 + t.minute if pd.notnull(t) else None)
 
+    # Fora do turno = ±1 hora
     df['Entrada_fora_turno'] = df.apply(
         lambda row: (
             row['Minutos_entrada'] is not None and 
@@ -57,80 +62,105 @@ def analisar_ponto(df):
 
     df['Minutos_extras'] = df.apply(
         lambda row: row['Minutos_trabalhados'] - (row['Minutos_turno_saida'] - row['Minutos_turno_entrada'])
-        if (row['Minutos_trabalhados'] is not None and row['Minutos_turno_saida'] is not None and row['Minutos_turno_entrada'] is not None)
+        if row['Minutos_trabalhados'] and row['Minutos_turno_saida'] and row['Minutos_turno_entrada']
         else 0,
         axis=1
     )
+
     df['Hora_extra'] = df['Minutos_extras'] > 15
-    df['AnoMes'] = df['Data'].dt.to_period('M').astype(str)
+
     df['Data_fmt'] = df['Data'].dt.strftime('%d/%m/%Y')
     df['Entrada_fmt'] = df['Entrada 1'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
     df['Saida_fmt'] = df['Saída 1'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
+    df['AnoMes'] = df['Data'].dt.to_period('M').astype(str)
+
     return df
 
-# -------------------- CARREGAR E ANALISAR --------------------
 df = carregar_dados()
 df = analisar_ponto(df)
 
-# -------------------- FILTROS E CARDS --------------------
-st.title("📅 Relatório de Ponto")
-meses_disponiveis = sorted(df['AnoMes'].dropna().unique())
-todos = st.checkbox("Selecionar todos os meses", value=True)
-meses_selecionados = meses_disponiveis if todos else st.multiselect("Meses:", meses_disponiveis, default=meses_disponiveis[:1])
-df_filtrado = df[df['AnoMes'].isin(meses_selecionados)]
+# Filtros
+meses = sorted(df['AnoMes'].dropna().unique())
+mes_selecionado = st.sidebar.selectbox("Selecione o mês:", ["Todos"] + meses)
 
-# Cards com totais
+if mes_selecionado != "Todos":
+    df = df[df['AnoMes'] == mes_selecionado]
+
+# Rankings
+ranking_horas = (
+    df[df['Hora_extra']]
+    .groupby('Nome')['Minutos_extras']
+    .sum()
+    .reset_index()
+    .rename(columns={'Minutos_extras': 'Total_minutos_extras'})
+)
+
+ranking_horas['Horas_fmt'] = ranking_horas['Total_minutos_extras'].apply(minutes_to_hms)
+
+ranking_turno = (
+    df[df['Entrada_fora_turno']]
+    .groupby('Nome')
+    .size()
+    .reset_index(name='Dias_fora_do_turno')
+)
+
+# Ordena rankings
+ranking_horas = ranking_horas.sort_values(by='Total_minutos_extras', ascending=False)
+ranking_turno = ranking_turno.sort_values(by='Dias_fora_do_turno', ascending=False)
+
+# Cards métricas topo
 col1, col2, col3 = st.columns(3)
-col1.metric("Funcionários com Hora Extra", df_filtrado[df_filtrado['Hora_extra']]['Nome'].nunique())
-col2.metric("Fora do Turno", df_filtrado[df_filtrado['Entrada_fora_turno']]['Nome'].nunique())
-col3.metric("Total de Registros", len(df_filtrado))
-
-# -------------------- RANKINGS GRÁFICOS --------------------
-col1, col2 = st.columns(2)
 with col1:
-    st.subheader("🔥 Ranking Horas Extras (Total em Horas)")
-    ranking_horas = df_filtrado[df_filtrado['Hora_extra']].groupby('Nome').agg({'Minutos_extras': 'sum'}).reset_index()
-    ranking_horas['Horas_fmt'] = ranking_horas['Minutos_extras'].apply(minutes_to_hms)
-    fig = px.bar(
-    ranking_horas.sort_values(by='Minutos_extras'),
-    x='Minutos_extras', y='Nome', orientation='h',
-    labels={'Minutos_extras': 'Minutos'},
-    hover_data=['Horas_fmt'],
-    template='plotly_white'
-), x='Minutos_extras', y='Nome', orientation='h', labels={'Minutos_extras':'Minutos'}, hover_data=['Horas_fmt'])
-    st.plotly_chart(fig, use_container_width=True)
-
+    st.metric("Funcionários com Hora Extra", ranking_horas.shape[0])
 with col2:
-    st.subheader("⏰ Ranking Dias Fora do Turno")
-    ranking_turno = df_filtrado[df_filtrado['Entrada_fora_turno']].groupby('Nome').size().reset_index(name='Dias')
-    fig2 = px.bar(
-    ranking_turno.sort_values(by='Dias'),
-    x='Dias', y='Nome', orientation='h',
-    template='plotly_white'
-), x='Dias', y='Nome', orientation='h')
+    st.metric("Funcionários Fora do Turno", ranking_turno.shape[0])
+with col3:
+    st.metric("Mês Selecionado", mes_selecionado)
+
+# Gráficos lado a lado
+col1, col2 = st.columns(2)
+
+fig = px.bar(
+    ranking_horas.sort_values(by='Total_minutos_extras'),
+    x='Total_minutos_extras', y='Nome', orientation='h',
+    labels={'Total_minutos_extras': 'Minutos'},
+    hover_data=['Horas_fmt'],
+    template='plotly_white',
+    title='Ranking: Total de Horas Extras'
+)
+
+fig2 = px.bar(
+    ranking_turno.sort_values(by='Dias_fora_do_turno'),
+    x='Dias_fora_do_turno', y='Nome', orientation='h',
+    labels={'Dias_fora_do_turno': 'Dias'},
+    template='plotly_white',
+    title='Ranking: Dias Fora do Turno'
+)
+
+with col1:
+    st.plotly_chart(fig, use_container_width=True)
+with col2:
     st.plotly_chart(fig2, use_container_width=True)
 
-# -------------------- DETALHAMENTO EXPANDIDO --------------------
+# Detalhamento - Top 50 infratores
 st.markdown("---")
-st.subheader("📋 Detalhamento por Funcionário")
+st.subheader("🔍 Detalhamento dos 50 maiores infratores")
 
-infratores = df_filtrado[(df_filtrado['Hora_extra']) | (df_filtrado['Entrada_fora_turno'])]
+infratores_hora_extra = df[df['Hora_extra']]
+infratores_fora_turno = df[df['Entrada_fora_turno']]
+infratores = pd.concat([infratores_hora_extra, infratores_fora_turno]).drop_duplicates()
+
 top_50 = infratores['Nome'].value_counts().head(50).index
+
 for nome in top_50:
     with st.expander(f"👤 {nome}"):
         pessoa = infratores[infratores['Nome'] == nome].copy()
         pessoa['Horas_fmt'] = pessoa['Minutos_extras'].apply(minutes_to_hms)
-        pessoa['Status'] = pessoa.apply(lambda row: "Hora Extra" if row['Hora_extra'] else ("Fora do Turno" if row['Entrada_fora_turno'] else "OK"), axis=1)
+        pessoa['Status'] = pessoa.apply(
+            lambda row: "Hora Extra" if row['Hora_extra'] else ("Fora do Turno" if row['Entrada_fora_turno'] else "OK"),
+            axis=1
+        )
         st.dataframe(
             pessoa[['AnoMes', 'Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Horas_fmt', 'Status']].sort_values(by='Data_fmt'),
             use_container_width=True
-        ), use_container_width=True)
-
-# -------------------- DOWNLOAD --------------------
-st.markdown("---")
-if st.button("📥 Exportar Detalhes para Excel"):
-    export = infratores[['Nome', 'AnoMes', 'Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Minutos_extras']]
-    export['Horas_fmt'] = export['Minutos_extras'].apply(minutes_to_hms)
-    excel_io = BytesIO()
-    export.to_excel(excel_io, index=False)
-    st.download_button("📄 Baixar Arquivo Excel", data=excel_io.getvalue(), file_name="detalhes_infracoes.xlsx")
+        )
