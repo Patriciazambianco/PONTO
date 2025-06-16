@@ -88,35 +88,32 @@ meses_disponiveis = sorted(df['AnoMes'].dropna().unique())
 todos_selecionados = st.checkbox("Selecionar todos os meses", value=True)
 meses_selecionados = meses_disponiveis if todos_selecionados else st.multiselect("Meses:", meses_disponiveis, default=meses_disponiveis[:1])
 
-tipo = st.radio("Tipo de Infração:", ['Horas Extras', 'Fora do Turno'], horizontal=True)
-
-# Filtrando meses
 df_filtrado = df[df['AnoMes'].isin(meses_selecionados)]
 
-if tipo == "Horas Extras":
+col1, col2 = st.columns(2)
+
+with col1:
     st.subheader("🚀 Ranking - Horas Extras")
-    ranking = df_filtrado[df_filtrado['Hora_extra']].groupby(['Nome']).agg({'Minutos_extras': 'sum'}).reset_index()
-    ranking['Horas Extras'] = ranking['Minutos_extras'].apply(minutes_to_hms)
-    ranking = ranking.sort_values(by='Minutos_extras', ascending=False).reset_index(drop=True)
+    ranking_extra = df_filtrado[df_filtrado['Hora_extra']].groupby(['Nome']).agg({'Minutos_extras': 'sum'}).reset_index()
+    ranking_extra['Horas Extras'] = ranking_extra['Minutos_extras'].apply(minutes_to_hms)
+    ranking_extra = ranking_extra.sort_values(by='Minutos_extras', ascending=False).reset_index(drop=True)
+    st.dataframe(ranking_extra[['Nome', 'Horas Extras']], use_container_width=True)
 
-    st.dataframe(ranking[['Nome', 'Horas Extras']], use_container_width=True)
-
-    st.markdown("### 📋 Detalhamento")
-    detalhes = df_filtrado[df_filtrado['Hora_extra']].copy()
-    detalhes['Horas Extras'] = detalhes['Minutos_extras'].apply(minutes_to_hms)
-    detalhes = detalhes[['Nome', 'AnoMes', 'Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Horas Extras']]
-    st.dataframe(detalhes.sort_values(by=['Nome', 'AnoMes', 'Data_fmt']), use_container_width=True)
-
-else:
+with col2:
     st.subheader("⏰ Ranking - Fora do Turno")
-    ranking = df_filtrado[df_filtrado['Entrada_fora_turno']].groupby(['Nome']).size().reset_index(name='Dias Fora do Turno')
-    ranking = ranking.sort_values(by='Dias Fora do Turno', ascending=False).reset_index(drop=True)
+    ranking_turno = df_filtrado[df_filtrado['Entrada_fora_turno']].groupby(['Nome']).size().reset_index(name='Dias Fora do Turno')
+    ranking_turno = ranking_turno.sort_values(by='Dias Fora do Turno', ascending=False).reset_index(drop=True)
+    st.dataframe(ranking_turno, use_container_width=True)
 
-    st.dataframe(ranking, use_container_width=True)
+st.markdown("### 📋 Detalhamento - Horas Extras")
+detalhes_extra = df_filtrado[df_filtrado['Hora_extra']].copy()
+detalhes_extra['Horas Extras'] = detalhes_extra['Minutos_extras'].apply(minutes_to_hms)
+detalhes_extra = detalhes_extra[['Nome', 'AnoMes', 'Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Horas Extras']]
+st.dataframe(detalhes_extra.sort_values(by=['Nome', 'AnoMes', 'Data_fmt']), use_container_width=True)
 
-    st.markdown("### 📋 Detalhamento")
-    detalhes = df_filtrado[df_filtrado['Entrada_fora_turno']].copy()
-    detalhes['Turno Entrada'] = detalhes['Turnos.ENTRADA'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
-    detalhes['Turno Saída'] = detalhes['Turnos.SAIDA'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
-    detalhes = detalhes[['Nome', 'AnoMes', 'Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Turno Entrada', 'Turno Saída']]
-    st.dataframe(detalhes.sort_values(by=['Nome', 'AnoMes', 'Data_fmt']), use_container_width=True)
+st.markdown("### 📋 Detalhamento - Fora do Turno")
+detalhes_turno = df_filtrado[df_filtrado['Entrada_fora_turno']].copy()
+detalhes_turno['Turno Entrada'] = detalhes_turno['Turnos.ENTRADA'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
+detalhes_turno['Turno Saída'] = detalhes_turno['Turnos.SAIDA'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
+detalhes_turno = detalhes_turno[['Nome', 'AnoMes', 'Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Turno Entrada', 'Turno Saída']]
+st.dataframe(detalhes_turno.sort_values(by=['Nome', 'AnoMes', 'Data_fmt']), use_container_width=True)
