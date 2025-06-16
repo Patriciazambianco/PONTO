@@ -8,7 +8,7 @@ import io
 
 # URL do arquivo Excel no GitHub raw
 URL = "https://raw.githubusercontent.com/Patriciazambianco/PONTO/main/PONTO.xlsx"
-st.write("Colunas disponíveis:", df.columns.tolist())
+
 
 
 # Paleta de cores personalizada
@@ -21,6 +21,7 @@ COLOR_MAP = {
 
 @st.cache_data
 def carregar_dados():
+   st.write("Colunas disponíveis:", df.columns.tolist())
     response = requests.get(URL)
     response.raise_for_status()
     arquivo_excel = BytesIO(response.content)
