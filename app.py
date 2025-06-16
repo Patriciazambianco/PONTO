@@ -3,7 +3,7 @@ import pandas as pd
 import plotly.express as px
 from io import BytesIO
 import requests
-from datetime import datetime, timedelta
+from datetime import datetime
 
 st.set_page_config(layout="wide", page_title="Relatório de Ponto")
 
@@ -15,7 +15,10 @@ def carregar_dados():
     response.raise_for_status()
     df = pd.read_excel(BytesIO(response.content))
 
-    df['Data'] = pd.to_datetime(df['Data'], dayfirst=True)
+    # Conversões seguras
+    df['Data'] = pd.to_datetime(df['Data'], dayfirst=True, errors='coerce')
+    df = df[pd.notnull(df['Data'])]  # remove linhas com Data inválida
+
     df['Entrada 1'] = pd.to_datetime(df['Entrada 1'], errors='coerce')
     df['Saída 1'] = pd.to_datetime(df['Saída 1'], errors='coerce')
     df['Turnos.ENTRADA'] = pd.to_datetime(df['Turnos.ENTRADA'], format='%H:%M', errors='coerce')
@@ -26,12 +29,16 @@ def carregar_dados():
 
 df = carregar_dados()
 
+# Visualização inicial
+st.subheader("👀 Pré-visualização dos dados carregados")
+st.dataframe(df.head(), use_container_width=True)
+
 # 🎯 Filtro por mês
 meses = df['Ano-Mês'].sort_values().unique()
-mes_selecionado = st.selectbox("Selecione o mês", meses)
+mes_selecionado = st.selectbox("🗓️ Selecione o mês", meses)
 df = df[df['Ano-Mês'] == mes_selecionado]
 
-# 🎯 Análise de ponto
+# 🎯 Cálculo de horas extras
 def calcular_minutos(t1, t2):
     if pd.isnull(t1) or pd.isnull(t2):
         return None
@@ -44,6 +51,7 @@ df['Hora Extra (min)'] = df['Minutos Trabalhados'] - TURNO_PADRAO_MIN
 df['Hora Extra (min)'] = df['Hora Extra (min)'].apply(lambda x: x if x and x > 15 else 0)
 df['Hora Extra (h)'] = df['Hora Extra (min)'] / 60
 
+# 🎯 Cálculo fora do turno
 def fora_turno(row):
     if pd.isnull(row['Entrada 1']) or pd.isnull(row['Turnos.ENTRADA']):
         return False
@@ -53,43 +61,51 @@ def fora_turno(row):
 df['Fora do Turno'] = df.apply(fora_turno, axis=1)
 df['Reincidente'] = df['Fora do Turno'] | (df['Hora Extra (min)'] > 0)
 
-# 🎯 Ranking de reincidentes
+# 🎯 Ranking
 ranking = df[df['Reincidente']].groupby('Nome').agg({
     'Fora do Turno': 'sum',
     'Hora Extra (h)': 'sum',
     'Reincidente': 'count'
 }).rename(columns={'Reincidente': 'Total Ocorrências'}).sort_values(by='Total Ocorrências', ascending=False).reset_index()
 
-# 🎨 Estilo
 st.title("📊 Relatório de Ponto - Funcionários")
-st.markdown(f"### 🔎 Analisando mês: **{mes_selecionado}**")
+st.markdown(f"### 🔎 Mês Selecionado: **{mes_selecionado}**")
 
 # 🎯 Gráficos
 col1, col2 = st.columns(2)
 with col1:
-    fig = px.bar(ranking.head(10), x='Nome', y='Total Ocorrências', color='Total Ocorrências',
-                 title="Top 10 Reincidentes (Fora do turno ou HE)",
-                 color_continuous_scale="Reds")
+    st.subheader("🔝 Top Reincidentes")
+    fig = px.bar(ranking.head(10), x='Nome', y='Total Ocorrências', color='Fora do Turno',
+                 title="Top 10 (Fora do Turno e Hora Extra)",
+                 color_continuous_scale="OrRd")
     st.plotly_chart(fig, use_container_width=True)
 
 with col2:
+    st.subheader("📊 Distribuição Geral")
     fig2 = px.pie(ranking, values='Total Ocorrências', names='Nome',
                   title="Distribuição de Ocorrências")
     st.plotly_chart(fig2, use_container_width=True)
 
 # 🧾 Relatório Detalhado
-st.markdown("### 📋 Relatório Detalhado")
-funcionario_clicado = st.selectbox("Clique no nome do funcionário para ver os detalhes", ranking['Nome'].unique())
+st.markdown("### 📋 Detalhamento por Funcionário")
+funcionario_clicado = st.selectbox("Selecione um funcionário para ver os detalhes", ranking['Nome'].unique())
 
-detalhes = df[(df['Nome'] == funcionario_clicado) & (df['Reincidente'])]
-detalhes_exibir = detalhes[['Data', 'Entrada 1', 'Saída 1', 'Turnos.ENTRADA', 'Turnos.SAIDA',
-                            'Hora Extra (h)', 'Fora do Turno']].copy()
+detalhes = df[(df['Nome'] == funcionario_clicado) & (df['Reincidente'])].copy()
 
-# Formata datas
-detalhes_exibir['Data'] = detalhes_exibir['Data'].dt.strftime('%d/%m/%Y')
-detalhes_exibir['Entrada 1'] = detalhes_exibir['Entrada 1'].dt.strftime('%H:%M')
-detalhes_exibir['Saída 1'] = detalhes_exibir['Saída 1'].dt.strftime('%H:%M')
-detalhes_exibir['Turnos.ENTRADA'] = detalhes_exibir['Turnos.ENTRADA'].dt.strftime('%H:%M')
-detalhes_exibir['Turnos.SAIDA'] = detalhes_exibir['Turnos.SAIDA'].dt.strftime('%H:%M')
+# Formatando datas e horários
+detalhes['Data'] = detalhes['Data'].dt.strftime('%d/%m/%Y')
+for col in ['Entrada 1', 'Saída 1', 'Turnos.ENTRADA', 'Turnos.SAIDA']:
+    detalhes[col] = detalhes[col].dt.strftime('%H:%M')
 
-st.dataframe(detalhes_exibir, use_container_width=True)
+detalhes['Tipo de Ocorrência'] = detalhes.apply(
+    lambda row: "Ambos" if row['Fora do Turno'] and row['Hora Extra (min)'] > 0 else (
+        "Fora do Turno" if row['Fora do Turno'] else "Hora Extra"
+    ), axis=1
+)
+
+st.dataframe(
+    detalhes[['Data', 'Entrada 1', 'Saída 1', 'Turnos.ENTRADA', 'Turnos.SAIDA',
+              'Hora Extra (h)', 'Tipo de Ocorrência']],
+    use_container_width=True
+)
+
