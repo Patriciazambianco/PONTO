@@ -82,7 +82,7 @@ df = carregar_dados()
 df = analisar_ponto(df)
 
 # -------------------- FILTROS ----------------------
-st.markdown("### 📅 Selecione os Meses e Tipo")
+st.markdown("### 📅 Selecione os Meses e Tipo de Infração")
 
 meses_disponiveis = sorted(df['AnoMes'].dropna().unique())
 todos_selecionados = st.checkbox("Selecionar todos os meses", value=True)
@@ -93,26 +93,13 @@ tipo = st.radio("Tipo de Infração:", ['Horas Extras', 'Fora do Turno'], horizo
 # Filtrando meses
 df_filtrado = df[df['AnoMes'].isin(meses_selecionados)]
 
-# -------------------- RANKING + DETALHE ----------------------
-def destacar_reincidentes(df_ranking, col='Nome'):
-    nomes = df_filtrado[df_filtrado['Hora_extra'] | df_filtrado['Entrada_fora_turno']][col]
-    reincidentes = nomes.value_counts()[nomes.value_counts() > 1].index.tolist()
-
-    def highlight(row):
-        return ['background-color: orange' if row[col] in reincidentes else '' for _ in row]
-
-    return highlight
-
 if tipo == "Horas Extras":
     st.subheader("🚀 Ranking - Horas Extras")
     ranking = df_filtrado[df_filtrado['Hora_extra']].groupby(['Nome']).agg({'Minutos_extras': 'sum'}).reset_index()
     ranking['Horas Extras'] = ranking['Minutos_extras'].apply(minutes_to_hms)
     ranking = ranking.sort_values(by='Minutos_extras', ascending=False).reset_index(drop=True)
 
-    st.dataframe(
-        ranking[['Nome', 'Horas Extras']].style.apply(destacar_reincidentes(ranking), axis=1),
-        use_container_width=True
-    )
+    st.dataframe(ranking[['Nome', 'Horas Extras']], use_container_width=True)
 
     st.markdown("### 📋 Detalhamento")
     detalhes = df_filtrado[df_filtrado['Hora_extra']].copy()
@@ -125,10 +112,7 @@ else:
     ranking = df_filtrado[df_filtrado['Entrada_fora_turno']].groupby(['Nome']).size().reset_index(name='Dias Fora do Turno')
     ranking = ranking.sort_values(by='Dias Fora do Turno', ascending=False).reset_index(drop=True)
 
-    st.dataframe(
-        ranking.style.apply(destacar_reincidentes(ranking), axis=1),
-        use_container_width=True
-    )
+    st.dataframe(ranking, use_container_width=True)
 
     st.markdown("### 📋 Detalhamento")
     detalhes = df_filtrado[df_filtrado['Entrada_fora_turno']].copy()
