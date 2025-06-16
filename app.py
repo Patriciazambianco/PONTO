@@ -3,6 +3,7 @@ import pandas as pd
 import requests
 from io import BytesIO
 from datetime import datetime, timedelta
+from st_aggrid import AgGrid, GridOptionsBuilder, GridUpdateMode
 
 st.set_page_config(layout="wide")
 st.title("📊 Relatório de Ponto – Análise de Horas Extras e Fora do Turno")
@@ -76,6 +77,7 @@ def analisar_ponto(df):
 df = carregar_dados()
 df = analisar_ponto(df)
 
+# filtro mês
 meses_disponiveis = df['Data'].dt.to_period('M').dropna().unique()
 meses_disponiveis = sorted(meses_disponiveis, reverse=True)
 
@@ -97,57 +99,59 @@ ranking_turno = df_mes[df_mes['Entrada_fora_turno']].groupby('Nome').agg(
     Dias_fora_do_turno=('Entrada_fora_turno', 'count')
 ).reset_index()
 
-col1, col2 = st.columns(2)
-with col1:
-    st.subheader("🚀 Ranking - Horas Extras (horas totais no mês)")
+# Mostrar ranking horas extras (clicável)
+st.subheader("🚀 Ranking - Horas Extras (clique para ver detalhes)")
+
+gb = GridOptionsBuilder.from_dataframe(
+    ranking_excesso.sort_values(by='Total_Horas_Extras', ascending=False)[['Nome', 'Dias_com_hora_extra', 'Total_Horas_Extras']]
+)
+gb.configure_selection(selection_mode='single', use_checkbox=False)
+grid_options = gb.build()
+
+grid_response = AgGrid(
+    ranking_excesso.sort_values(by='Total_Horas_Extras', ascending=False)[['Nome', 'Dias_com_hora_extra', 'Total_Horas_Extras']],
+    gridOptions=grid_options,
+    update_mode=GridUpdateMode.SELECTION_CHANGED,
+    theme='alpine',
+    enable_enterprise_modules=False,
+    fit_columns_on_grid_load=True,
+    height=250,
+    reload_data=True
+)
+
+selected_rows = grid_response['selected_rows']
+
+if selected_rows:
+    nome_selecionado = selected_rows[0]['Nome']
+    st.markdown(f"### Detalhes de infrações para: **{nome_selecionado}**")
+
+    df_func = df_mes[df_mes['Nome'] == nome_selecionado]
+    df_func = df_func[(df_func['Hora_extra']) | (df_func['Entrada_fora_turno'])]
+
+    df_func['Horas_extras'] = df_func['Minutos_extras'].apply(lambda x: round(x / 60, 2) if x > 0 else 0)
+
     st.dataframe(
-        ranking_excesso.sort_values(by='Total_Horas_Extras', ascending=False)[['Nome', 'Dias_com_hora_extra', 'Total_Horas_Extras']],
+        df_func[['Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Turno_entrada_fmt', 'Turno_saida_fmt', 'Horas_extras', 'Entrada_fora_turno', 'Hora_extra']],
         use_container_width=True,
         column_config={
-            'Nome': 'Funcionário',
-            'Dias_com_hora_extra': 'Dias com Hora Extra',
-            'Total_Horas_Extras': 'Horas Extras'
-        }
-    )
-with col2:
-    st.subheader("⏰ Ranking - Dias Fora do Turno")
-    st.dataframe(
-        ranking_turno.sort_values(by='Dias_fora_do_turno', ascending=False),
-        use_container_width=True,
-        column_config={
-            'Nome': 'Funcionário',
-            'Dias_fora_do_turno': 'Dias Fora do Turno'
+            'Data_fmt': 'Data',
+            'Entrada_fmt': 'Entrada',
+            'Saida_fmt': 'Saída',
+            'Turno_entrada_fmt': 'Turno Entrada',
+            'Turno_saida_fmt': 'Turno Saída',
+            'Horas_extras': 'Horas Extras',
+            'Entrada_fora_turno': 'Fora do Turno',
+            'Hora_extra': 'Hora Extra'
         }
     )
 
-# Lista dos nomes para detalhamento (que estão no ranking)
-infratores = pd.concat([
-    ranking_excesso['Nome'],
-    ranking_turno['Nome']
-]).drop_duplicates().sort_values()
-
-st.markdown("---")
-st.subheader("🔎 Detalhamento por Funcionário")
-
-funcionario_selecionado = st.selectbox("Clique no nome para ver os detalhes:", infratores)
-
-# Dados do funcionário selecionado
-df_func = df_mes[df_mes['Nome'] == funcionario_selecionado].copy()
-df_func = df_func[(df_func['Hora_extra']) | (df_func['Entrada_fora_turno'])]
-
-df_func['Horas_extras'] = df_func['Minutos_extras'].apply(lambda x: round(x / 60, 2) if x > 0 else 0)
-
+# Ranking fora do turno (não clicável para simplificar)
+st.subheader("⏰ Ranking - Dias Fora do Turno")
 st.dataframe(
-    df_func[['Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Turno_entrada_fmt', 'Turno_saida_fmt', 'Horas_extras', 'Entrada_fora_turno', 'Hora_extra']],
+    ranking_turno.sort_values(by='Dias_fora_do_turno', ascending=False),
     use_container_width=True,
     column_config={
-        'Data_fmt': 'Data',
-        'Entrada_fmt': 'Entrada',
-        'Saida_fmt': 'Saída',
-        'Turno_entrada_fmt': 'Turno Entrada',
-        'Turno_saida_fmt': 'Turno Saída',
-        'Horas_extras': 'Horas Extras',
-        'Entrada_fora_turno': 'Fora do Turno',
-        'Hora_extra': 'Hora Extra'
+        'Nome': 'Funcionário',
+        'Dias_fora_do_turno': 'Dias Fora do Turno'
     }
 )
