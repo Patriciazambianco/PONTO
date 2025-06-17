@@ -118,7 +118,6 @@ ranking_fora_turno = (
     .head(20)
 )
 
-# Layout alinhadinho com 2 linhas e 2 colunas cada
 st.markdown("---")
 
 # Linha 1: Horas Extras lado a lado
