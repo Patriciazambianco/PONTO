@@ -10,7 +10,6 @@ st.title("📊 Relatório de Ponto")
 
 URL = "https://raw.githubusercontent.com/Patriciazambianco/PONTO/main/PONTO.xlsx"
 
-# Função utilitária global para converter minutos em HH:MM:SS
 def minutos_para_hms(minutos):
     try:
         if minutos is None or pd.isna(minutos) or minutos <= 0:
@@ -29,7 +28,6 @@ def carregar_dados():
     arquivo_excel = BytesIO(response.content)
     df = pd.read_excel(arquivo_excel)
 
-    # Ajuste das datas e horários
     df['Data'] = pd.to_datetime(df['Data'], dayfirst=True, errors='coerce')
     df['Entrada 1'] = pd.to_datetime(df['Entrada 1'], format='%H:%M:%S', errors='coerce').dt.time
     df['Saída 1'] = pd.to_datetime(df['Saída 1'], format='%H:%M:%S', errors='coerce').dt.time
@@ -91,20 +89,19 @@ mes_selecionado = st.selectbox("Selecione o mês para análise:", meses_disponiv
 
 df_mes = df[df['Mes_Ano'] == mes_selecionado]
 
-# Agrupamento para trazer jornada só uma vez
 ranking_horas = (
     df_mes[df_mes['Hora_extra']]
-    .groupby(['Nome', 'Turnos.ENTRADA', 'Turnos.SAIDA'])
-    .agg({'Minutos_extras': 'sum'})
-    .reset_index()
-    .rename(columns={'Minutos_extras': 'Total_minutos_extras'})
+    .groupby('Nome')['Minutos_extras']
+    .sum()
+    .reset_index(name='Total_minutos_extras')
 )
+
 ranking_horas['Horas_fmt'] = ranking_horas['Total_minutos_extras'].apply(minutos_para_hms)
 ranking_horas = ranking_horas.sort_values(by='Total_minutos_extras', ascending=False)
 
 ranking_fora_turno = (
     df_mes[df_mes['Entrada_fora_turno']]
-    .groupby(['Nome', 'Turnos.ENTRADA', 'Turnos.SAIDA'])
+    .groupby('Nome')
     .size()
     .reset_index(name='Dias_fora_turno')
 )
@@ -115,23 +112,14 @@ col1, col2 = st.columns(2)
 with col1:
     st.subheader(f"⏰ Ranking - Total de Horas Extras ({mes_selecionado})")
     st.dataframe(
-        ranking_horas.rename(columns={
-            'Nome': 'Funcionário',
-            'Horas_fmt': 'Horas Extras',
-            'Turnos.ENTRADA': 'Turno Entrada',
-            'Turnos.SAIDA': 'Turno Saída'
-        }),
+        ranking_horas.rename(columns={'Nome': 'Funcionário', 'Horas_fmt': 'Horas Extras'}),
         use_container_width=True
     )
 
 with col2:
     st.subheader(f"🚨 Ranking - Dias Fora do Turno ({mes_selecionado})")
     st.dataframe(
-        ranking_fora_turno.rename(columns={
-            'Nome': 'Funcionário',
-            'Turnos.ENTRADA': 'Turno Entrada',
-            'Turnos.SAIDA': 'Turno Saída'
-        }),
+        ranking_fora_turno.rename(columns={'Nome': 'Funcionário'}),
         use_container_width=True
     )
 
@@ -189,26 +177,28 @@ fig_fora = px.bar(
 fig_fora.update_layout(yaxis={'categoryorder': 'total ascending'}, plot_bgcolor='white')
 st.plotly_chart(fig_fora, use_container_width=True)
 
-# Exportar Excel
-import io
+# --- EXPORTAÇÃO EXCEL ---
 
 def exportar_excel():
-    output = io.BytesIO()
+    output = BytesIO()
+
+    # Mostrar colunas para debug
+    st.write("Colunas df_offensores:", df_offensores.columns.tolist())
+
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        ranking_horas.rename(columns={
-            'Nome': 'Funcionário',
-            'Horas_fmt': 'Horas Extras',
-            'Turnos.ENTRADA': 'Turno Entrada',
-            'Turnos.SAIDA': 'Turno Saída'
-        }).to_excel(writer, index=False, sheet_name='Horas Extras')
+        cols_esperadas = [
+            'Nome', 'Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Turnos.ENTRADA',
+            'Turnos.SAIDA', 'Hora_extra', 'Entrada_fora_turno'
+        ]
+        # Seleciona só as colunas que existem mesmo
+        cols_existentes = [col for col in cols_esperadas if col in df_offensores.columns]
 
-        ranking_fora_turno.rename(columns={
-            'Nome': 'Funcionário',
-            'Turnos.ENTRADA': 'Turno Entrada',
-            'Turnos.SAIDA': 'Turno Saída'
-        }).to_excel(writer, index=False, sheet_name='Dias Fora do Turno')
+        if len(cols_existentes) < len(cols_esperadas):
+            faltando = set(cols_esperadas) - set(cols_existentes)
+            st.warning(f"Colunas faltando para exportar: {faltando}")
 
-        df_offensores.rename(columns={
+        df_offensores[cols_existentes].rename(columns={
+            'Nome': 'Funcionário',
             'Data_fmt': 'Data',
             'Entrada_fmt': 'Entrada',
             'Saida_fmt': 'Saída',
@@ -216,15 +206,17 @@ def exportar_excel():
             'Turnos.SAIDA': 'Turno Saída',
             'Hora_extra': 'Hora Extra',
             'Entrada_fora_turno': 'Fora do Turno'
-        })[
-            ['Nome', 'Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Turnos.ENTRADA', 'Turnos.SAIDA', 'Hora_extra', 'Entrada_fora_turno']
-        ].to_excel(writer, index=False, sheet_name='Detalhamento Ofensores')
+        }).to_excel(writer, index=False, sheet_name='Detalhamento Ofensores')
 
         writer.save()
         processed_data = output.getvalue()
     return processed_data
 
-st.markdown("---")
-if st.button("⬇️ Exportar relatório consolidado para Excel"):
-    excel_data = exportar_excel()
-    st.download_button(label="Clique para baixar o Excel", data=excel_data, file_name=f"relatorio_ponto_{mes_selecionado}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+if st.button('📥 Exportar detalhes para Excel'):
+    dados_excel = exportar_excel()
+    st.download_button(
+        label="Clique para baixar o arquivo Excel",
+        data=dados_excel,
+        file_name=f"relatorio_ponto_{mes_selecionado}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
