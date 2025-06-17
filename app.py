@@ -96,8 +96,7 @@ ranking_fora_turno = (
 )
 ranking_fora_turno = ranking_fora_turno.sort_values(by='Dias_fora_turno', ascending=False).head(20)
 
-# Layout lado a lado com 4 colunas
-col1, col2, col3, col4 = st.columns([2, 3, 2, 3])
+col1, col2 = st.columns([2, 3])
 
 with col1:
     st.subheader(f"⏰ Top 20 Horas Extras ({mes_selecionado})")
@@ -119,12 +118,10 @@ with col2:
     })
     st.dataframe(df_det_horas_display[['Data', 'Entrada', 'Saída', 'Turno Entrada', 'Turno Saída', 'Horas Extras (h)']], use_container_width=True)
 
-with col3:
     st.subheader(f"🚨 Top 20 Fora do Turno ({mes_selecionado})")
     nome_selecionado_fora = st.selectbox("Funcionário (Fora do Turno):", ranking_fora_turno['Nome'].tolist(), key='sel_fora')
     st.dataframe(ranking_fora_turno.rename(columns={'Nome': 'Funcionário', 'Dias_fora_turno': 'Dias Fora do Turno'}), use_container_width=True)
 
-with col4:
     st.subheader(f"Detalhes Fora do Turno - {nome_selecionado_fora}")
     df_det_fora = df_mes[(df_mes['Nome'] == nome_selecionado_fora) & (df_mes['Entrada_fora_turno'])]
     df_det_fora_display = df_det_fora[['Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Turnos.ENTRADA', 'Turnos.SAIDA']]
