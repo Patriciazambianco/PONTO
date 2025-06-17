@@ -3,17 +3,11 @@ import pandas as pd
 import requests
 from io import BytesIO
 from datetime import datetime
-import plotly.express as px
 
 st.set_page_config(layout="wide")
 st.title("📊 Relatório de Ponto - Horas Extras e Fora do Turno")
 
 URL = "https://raw.githubusercontent.com/Patriciazambianco/PONTO/main/PONTO.xlsx"
-
-def minutos_para_horas(minutos):
-    if pd.isna(minutos) or minutos <= 0:
-        return 0
-    return round(minutos / 60, 2)
 
 @st.cache_data
 def carregar_dados():
@@ -21,11 +15,13 @@ def carregar_dados():
     response.raise_for_status()
     arquivo_excel = BytesIO(response.content)
     df = pd.read_excel(arquivo_excel)
+
     df['Data'] = pd.to_datetime(df['Data'], dayfirst=True, errors='coerce')
     df['Entrada 1'] = pd.to_datetime(df['Entrada 1'], format='%H:%M:%S', errors='coerce').dt.time
     df['Saída 1'] = pd.to_datetime(df['Saída 1'], format='%H:%M:%S', errors='coerce').dt.time
     df['Turnos.ENTRADA'] = pd.to_datetime(df['Turnos.ENTRADA'], format='%H:%M', errors='coerce').dt.time
     df['Turnos.SAIDA'] = pd.to_datetime(df['Turnos.SAIDA'], format='%H:%M', errors='coerce').dt.time
+
     return df
 
 def diff_minutes(t1, t2):
@@ -63,155 +59,100 @@ def analisar_ponto(df):
         axis=1
     )
 
-    df['Minutos_extras'] = df['Minutos_extras'].apply(lambda x: x if x > 0 else 0)
-
     df['Hora_extra'] = df['Minutos_extras'] > 15
 
-    df['Semana_Ano'] = df['Data'].dt.strftime('%Y-%U')
-    df['Coordenador'] = df['MICROSIGA.COORDENADOR_IMEDIATO'].fillna('Sem Coordenador')
-    df['Nome'] = df['Nome'].fillna('Sem Nome')
+    df['Mes_Ano'] = df['Data'].dt.to_period('M').astype(str)
+
+    df['Data_fmt'] = df['Data'].dt.strftime('%d/%m')
+    df['Entrada_fmt'] = df['Entrada 1'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
+    df['Saida_fmt'] = df['Saída 1'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
 
     return df
 
 df = carregar_dados()
 df = analisar_ponto(df)
 
-coordenadores = sorted(df['Coordenador'].unique())
-selecionado_coordenador = st.selectbox("Selecione o Coordenador:", ['Todos'] + coordenadores)
+meses_disponiveis = sorted(df['Mes_Ano'].dropna().unique(), reverse=True)
+mes_selecionado = st.selectbox("Selecione o mês para análise:", meses_disponiveis)
 
-if selecionado_coordenador != 'Todos':
-    df_filtrado = df[df['Coordenador'] == selecionado_coordenador]
-else:
-    df_filtrado = df.copy()
+df_mes = df[df['Mes_Ano'] == mes_selecionado]
 
-# Ranking Top 20 Horas Extras (soma minutos extras por funcionário)
-ranking_horas_extras = (
-    df_filtrado.groupby('Nome')['Minutos_extras']
+# Ranking Horas Extras - top 20
+ranking_horas = (
+    df_mes[df_mes['Hora_extra']]
+    .groupby('Nome')['Minutos_extras']
     .sum()
-    .reset_index()
-    .sort_values('Minutos_extras', ascending=False)
-    .head(20)
+    .reset_index(name='Total_minutos_extras')
 )
-ranking_horas_extras['Horas_extras'] = ranking_horas_extras['Minutos_extras'].apply(minutos_para_horas)
+ranking_horas['Horas_extras'] = ranking_horas['Total_minutos_extras'] / 60
+ranking_horas = ranking_horas.sort_values(by='Horas_extras', ascending=False).head(20)
 
-# Ranking Top 20 Jornadas Fora do Turno (contagem por funcionário)
+# Ranking Fora do Turno - top 20
 ranking_fora_turno = (
-    df_filtrado[df_filtrado['Entrada_fora_turno']]
+    df_mes[df_mes['Entrada_fora_turno']]
     .groupby('Nome')
     .size()
     .reset_index(name='Dias_fora_turno')
-    .sort_values('Dias_fora_turno', ascending=False)
-    .head(20)
 )
+ranking_fora_turno = ranking_fora_turno.sort_values(by='Dias_fora_turno', ascending=False).head(20)
 
-# Colunas de seleção para mostrar os dois rankings lado a lado
-col1, col2 = st.columns(2)
+# Layout lado a lado com 4 colunas
+col1, col2, col3, col4 = st.columns([2, 3, 2, 3])
 
 with col1:
-    st.subheader("Top 20 Horas Extras (Horas)")
-    sel_he = st.radio("Selecionar Funcionário para Detalhes:", ['Nenhum'] + ranking_horas_extras['Nome'].tolist())
-    st.dataframe(ranking_horas_extras[['Nome', 'Horas_extras']].set_index('Nome'))
+    st.subheader(f"⏰ Top 20 Horas Extras ({mes_selecionado})")
+    nome_selecionado_horas = st.selectbox("Funcionário (Horas Extras):", ranking_horas['Nome'].tolist(), key='sel_horas')
+    st.dataframe(ranking_horas.rename(columns={'Nome': 'Funcionário', 'Horas_extras': 'Horas Extras (h)'}), use_container_width=True)
 
 with col2:
-    st.subheader("Top 20 Fora do Turno (Dias)")
-    sel_ft = st.radio("Selecionar Funcionário para Detalhes:", ['Nenhum'] + ranking_fora_turno['Nome'].tolist())
-    st.dataframe(ranking_fora_turno.set_index('Nome'))
-
-# Mostrar detalhes do funcionário selecionado (de qualquer ranking)
-nome_selecionado = None
-if sel_he != 'Nenhum':
-    nome_selecionado = sel_he
-elif sel_ft != 'Nenhum':
-    nome_selecionado = sel_ft
-
-if nome_selecionado:
-    st.markdown(f"### Detalhes de {nome_selecionado}")
-
-    detalhes = df_filtrado[df_filtrado['Nome'] == nome_selecionado].copy()
-    detalhes['Hora_extra_h'] = detalhes['Minutos_extras'].apply(minutos_para_horas)
-    detalhes['Data_fmt'] = detalhes['Data'].dt.strftime('%d/%m/%Y')
-
-    # Mostrar horas extras detalhadas por dia
-    st.write("**Horas Extras Detalhadas:**")
-    st.dataframe(detalhes[['Data_fmt', 'Hora_extra_h']].rename(columns={
+    st.subheader(f"Detalhes Horas Extras - {nome_selecionado_horas}")
+    df_det_horas = df_mes[(df_mes['Nome'] == nome_selecionado_horas) & (df_mes['Hora_extra'])]
+    df_det_horas_display = df_det_horas[['Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Turnos.ENTRADA', 'Turnos.SAIDA', 'Minutos_extras']]
+    df_det_horas_display['Horas_extras'] = df_det_horas_display['Minutos_extras'] / 60
+    df_det_horas_display = df_det_horas_display.rename(columns={
         'Data_fmt': 'Data',
-        'Hora_extra_h': 'Horas Extras'
-    }))
+        'Entrada_fmt': 'Entrada',
+        'Saida_fmt': 'Saída',
+        'Turnos.ENTRADA': 'Turno Entrada',
+        'Turnos.SAIDA': 'Turno Saída',
+        'Horas_extras': 'Horas Extras (h)'
+    })
+    st.dataframe(df_det_horas_display[['Data', 'Entrada', 'Saída', 'Turno Entrada', 'Turno Saída', 'Horas Extras (h)']], use_container_width=True)
 
-    # Mostrar dias com entrada fora do turno
-    fora_turno_detalhes = detalhes[detalhes['Entrada_fora_turno']]
-    if not fora_turno_detalhes.empty:
-        st.write("**Dias com Entrada Fora do Turno:**")
-        fora_turno_detalhes = fora_turno_detalhes.copy()
-        fora_turno_detalhes['Data_fmt'] = fora_turno_detalhes['Data'].dt.strftime('%d/%m/%Y')
-        st.dataframe(fora_turno_detalhes[['Data_fmt', 'Turnos.ENTRADA', 'Entrada 1']].rename(columns={
-            'Data_fmt': 'Data',
-            'Turnos.ENTRADA': 'Hora de Entrada Esperada',
-            'Entrada 1': 'Hora de Entrada Real'
-        }))
-    else:
-        st.write("Nenhum dia com entrada fora do turno.")
+with col3:
+    st.subheader(f"🚨 Top 20 Fora do Turno ({mes_selecionado})")
+    nome_selecionado_fora = st.selectbox("Funcionário (Fora do Turno):", ranking_fora_turno['Nome'].tolist(), key='sel_fora')
+    st.dataframe(ranking_fora_turno.rename(columns={'Nome': 'Funcionário', 'Dias_fora_turno': 'Dias Fora do Turno'}), use_container_width=True)
 
-# Tendência semanal (soma minutos extras e contagem fora do turno por semana)
-tendencia = (
-    df_filtrado.groupby(['Semana_Ano', 'Nome'])
-    .agg(
-        Minutos_extras_totais=pd.NamedAgg(column='Minutos_extras', aggfunc='sum'),
-        Dias_fora_turno=pd.NamedAgg(column='Entrada_fora_turno', aggfunc='sum')
-    )
-    .reset_index()
-)
+with col4:
+    st.subheader(f"Detalhes Fora do Turno - {nome_selecionado_fora}")
+    df_det_fora = df_mes[(df_mes['Nome'] == nome_selecionado_fora) & (df_mes['Entrada_fora_turno'])]
+    df_det_fora_display = df_det_fora[['Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Turnos.ENTRADA', 'Turnos.SAIDA']]
+    df_det_fora_display = df_det_fora_display.rename(columns={
+        'Data_fmt': 'Data',
+        'Entrada_fmt': 'Entrada',
+        'Saida_fmt': 'Saída',
+        'Turnos.ENTRADA': 'Turno Entrada',
+        'Turnos.SAIDA': 'Turno Saída'
+    })
+    st.dataframe(df_det_fora_display[['Data', 'Entrada', 'Saída', 'Turno Entrada', 'Turno Saída']], use_container_width=True)
 
-tendencia['Horas_extras'] = tendencia['Minutos_extras_totais'].apply(minutos_para_horas)
+# Botão para exportar os detalhes para Excel (os dois juntos)
+import io
 
-st.subheader("Tendência Semanal (Horas Extras e Dias Fora do Turno)")
-
-fig = px.line(
-    tendencia,
-    x='Semana_Ano',
-    y='Horas_extras',
-    color='Nome',
-    title='Horas Extras Semanais',
-    labels={'Semana_Ano': 'Semana (Ano-Semana)', 'Horas_extras': 'Horas Extras'}
-)
-st.plotly_chart(fig, use_container_width=True)
-
-fig2 = px.line(
-    tendencia,
-    x='Semana_Ano',
-    y='Dias_fora_turno',
-    color='Nome',
-    title='Dias Fora do Turno Semanais',
-    labels={'Semana_Ano': 'Semana (Ano-Semana)', 'Dias_fora_turno': 'Dias Fora do Turno'}
-)
-st.plotly_chart(fig2, use_container_width=True)
-
-# Botão para exportar os dados filtrados detalhados para Excel
-def to_excel(dados_extras, dados_fora_turno):
-    import io
+def exportar_excel():
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        dados_extras.to_excel(writer, index=False, sheet_name='Horas_Extras')
-        dados_fora_turno.to_excel(writer, index=False, sheet_name='Fora_do_Turno')
+        df_det_horas_display.to_excel(writer, index=False, sheet_name='Horas_Extras')
+        df_det_fora_display.to_excel(writer, index=False, sheet_name='Fora_do_Turno')
         writer.save()
     processed_data = output.getvalue()
     return processed_data
 
-if st.button("Exportar Dados Filtrados para Excel"):
-    df_extras_export = df_filtrado[df_filtrado['Minutos_extras'] > 0][
-        ['Nome', 'Data', 'Minutos_extras']
-    ].copy()
-    df_extras_export['Horas Extras'] = df_extras_export['Minutos_extras'].apply(minutos_para_horas)
-    df_extras_export.drop(columns=['Minutos_extras'], inplace=True)
-
-    df_fora_turno_export = df_filtrado[df_filtrado['Entrada_fora_turno']][
-        ['Nome', 'Data', 'Turnos.ENTRADA', 'Entrada 1']
-    ].copy()
-
-    excel_bytes = to_excel(df_extras_export, df_fora_turno_export)
-    st.download_button(
-        label="Clique para baixar o Excel",
-        data=excel_bytes,
-        file_name="Relatorio_Ponto.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+excel_data = exportar_excel()
+st.download_button(
+    label="📥 Exportar Detalhes para Excel",
+    data=excel_data,
+    file_name=f"Detalhes_Ponto_{mes_selecionado}.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
