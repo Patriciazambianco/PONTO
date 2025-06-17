@@ -80,13 +80,28 @@ def analisar_ponto(df):
 df = carregar_dados()
 df = analisar_ponto(df)
 
-meses_disponiveis = sorted(df['Mes_Ano'].dropna().unique(), reverse=True)
-mes_selecionado = st.selectbox("Selecione o mês para análise:", meses_disponiveis)
+# --- FILTROS EM CARDS LADOS A LADO ---
+st.markdown("### Filtros")
+col1, col2 = st.columns([1, 1])
 
-df_mes = df[df['Mes_Ano'] == mes_selecionado]
+with col1:
+    meses_disponiveis = sorted(df['Mes_Ano'].dropna().unique(), reverse=True)
+    mes_selecionado = st.selectbox("Selecione o mês:", meses_disponiveis)
 
+with col2:
+    coordenadores_disponiveis = sorted(df['COORDENADOR'].dropna().unique())
+    coordenador_selecionado = st.selectbox("Selecione o coordenador:", ["Todos"] + coordenadores_disponiveis)
+
+# Aplica filtro mês
+df_filtrado = df[df['Mes_Ano'] == mes_selecionado]
+
+# Aplica filtro coordenador
+if coordenador_selecionado != "Todos":
+    df_filtrado = df_filtrado[df_filtrado['COORDENADOR'] == coordenador_selecionado]
+
+# Rankings top 20
 ranking_horas = (
-    df_mes[df_mes['Hora_extra_flag']]
+    df_filtrado[df_filtrado['Hora_extra_flag']]
     .groupby('Nome')['Horas_extras']
     .sum()
     .reset_index()
@@ -95,7 +110,7 @@ ranking_horas = (
 )
 
 ranking_fora_turno = (
-    df_mes[df_mes['Entrada_fora_turno']]
+    df_filtrado[df_filtrado['Entrada_fora_turno']]
     .groupby('Nome')
     .size()
     .reset_index(name='Dias_fora_turno')
@@ -103,7 +118,10 @@ ranking_fora_turno = (
     .head(20)
 )
 
-# Primeira linha: Horas Extras lado a lado
+# Layout alinhadinho com 2 linhas e 2 colunas cada
+st.markdown("---")
+
+# Linha 1: Horas Extras lado a lado
 st.subheader("Horas Extras")
 cols1 = st.columns(2)
 with cols1[0]:
@@ -116,7 +134,7 @@ with cols1[0]:
 
 with cols1[1]:
     st.markdown("**Detalhes Horas Extras**")
-    detalhes_horas = df_mes[(df_mes['Nome'] == selecionado_horas) & (df_mes['Hora_extra_flag'])][
+    detalhes_horas = df_filtrado[(df_filtrado['Nome'] == selecionado_horas) & (df_filtrado['Hora_extra_flag'])][
         ['Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Horas_extras', 'Turnos.ENTRADA', 'Turnos.SAIDA']
     ]
     detalhes_horas = detalhes_horas.rename(
@@ -131,7 +149,9 @@ with cols1[1]:
     )
     st.dataframe(detalhes_horas, use_container_width=True)
 
-# Segunda linha: Fora do Turno lado a lado
+st.markdown("---")
+
+# Linha 2: Fora do Turno lado a lado
 st.subheader("Fora do Turno")
 cols2 = st.columns(2)
 with cols2[0]:
@@ -144,7 +164,7 @@ with cols2[0]:
 
 with cols2[1]:
     st.markdown("**Detalhes Fora do Turno**")
-    detalhes_fora = df_mes[(df_mes['Nome'] == selecionado_fora) & (df_mes['Entrada_fora_turno'])][
+    detalhes_fora = df_filtrado[(df_filtrado['Nome'] == selecionado_fora) & (df_filtrado['Entrada_fora_turno'])][
         ['Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Turnos.ENTRADA', 'Turnos.SAIDA']
     ]
     detalhes_fora = detalhes_fora.rename(
