@@ -90,51 +90,61 @@ mes_selecionado = st.selectbox("Selecione o mês para análise:", meses_disponiv
 
 df_mes = df[df['Mes_Ano'] == mes_selecionado]
 
+# Rankings
 ranking_horas = (
     df_mes[df_mes['Hora_extra']]
     .groupby('Nome')['Minutos_extras']
     .sum()
     .reset_index(name='Total_minutos_extras')
 )
+
 ranking_horas['Horas_fmt'] = ranking_horas['Total_minutos_extras'].apply(minutes_to_hms)
 ranking_horas = ranking_horas.sort_values(by='Total_minutos_extras', ascending=False)
 
 ranking_fora_turno = (
     df_mes[df_mes['Entrada_fora_turno']]
-    .groupby(['Nome', 'Data'])
-    .size()
-    .reset_index()
     .groupby('Nome')
     .size()
     .reset_index(name='Dias_fora_turno')
 )
 ranking_fora_turno = ranking_fora_turno.sort_values(by='Dias_fora_turno', ascending=False)
 
+# Mostrar os rankings lado a lado
 col1, col2 = st.columns(2)
 
 with col1:
     st.subheader(f"⏰ Ranking - Total de Horas Extras ({mes_selecionado})")
     st.dataframe(
-        ranking_horas.head(50).rename(columns={'Nome': 'Funcionário', 'Horas_fmt': 'Horas Extras'}),
+        ranking_horas.rename(columns={'Nome': 'Funcionário', 'Horas_fmt': 'Horas Extras'}),
         use_container_width=True
     )
 
 with col2:
     st.subheader(f"🚨 Ranking - Dias Fora do Turno ({mes_selecionado})")
     st.dataframe(
-        ranking_fora_turno.head(50).rename(columns={'Nome': 'Funcionário'}),
+        ranking_fora_turno.rename(columns={'Nome': 'Funcionário'}),
         use_container_width=True
     )
 
 st.markdown("---")
-st.subheader(f"🔍 Detalhamento dos 50 maiores ofensores em horas extras ({mes_selecionado})")
+st.subheader(f"🔍 Detalhamento dos principais ofensores ({mes_selecionado})")
 
-top50 = ranking_horas.head(50)['Nome'].tolist()
-df_offenders = df_mes[(df_mes['Nome'].isin(top50)) & ((df_mes['Hora_extra']) | (df_mes['Entrada_fora_turno']))]
+# Top ofensores em horas extras
+top_horas = ranking_horas.head(50)['Nome'].tolist()
+# Top ofensores em dias fora do turno
+top_fora_turno = ranking_fora_turno.head(50)['Nome'].tolist()
+
+# União dos dois grupos
+top_ofensores = list(set(top_horas + top_fora_turno))
+
+df_offenders = df_mes[df_mes['Nome'].isin(top_ofensores) & ((df_mes['Hora_extra']) | (df_mes['Entrada_fora_turno']))]
 
 df_offenders['Minutos_extras_fmt'] = df_offenders['Minutos_extras'].apply(minutes_to_hms)
+df_offenders['Data_fmt'] = df_offenders['Data'].dt.strftime('%d/%m/%Y')
+df_offenders['Entrada_fmt'] = df_offenders['Entrada 1'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
+df_offenders['Saida_fmt'] = df_offenders['Saída 1'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
 
-for nome in top50:
+for nome in top_ofensores:
     df_func = df_offenders[df_offenders['Nome'] == nome]
     if df_func.empty:
         continue
@@ -153,26 +163,27 @@ for nome in top50:
             use_container_width=True
         )
 
+# Gráficos limpos
 fig_horas = px.bar(
-    ranking_horas.head(50),
+    ranking_horas,
     x='Total_minutos_extras',
     y='Nome',
     orientation='h',
     labels={'Total_minutos_extras': 'Minutos', 'Nome': 'Funcionário'},
     title='Minutos de Horas Extras por Funcionário',
-    text=ranking_horas.head(50)['Horas_fmt']
+    text=ranking_horas['Horas_fmt']
 )
 fig_horas.update_layout(yaxis={'categoryorder':'total ascending'}, plot_bgcolor='white')
 st.plotly_chart(fig_horas, use_container_width=True)
 
 fig_fora = px.bar(
-    ranking_fora_turno.head(50),
+    ranking_fora_turno,
     x='Dias_fora_turno',
     y='Nome',
     orientation='h',
     labels={'Dias_fora_turno': 'Dias Fora do Turno', 'Nome': 'Funcionário'},
     title='Dias Fora do Turno por Funcionário',
-    text=ranking_fora_turno.head(50)['Dias_fora_turno']
+    text=ranking_fora_turno['Dias_fora_turno']
 )
 fig_fora.update_layout(yaxis={'categoryorder':'total ascending'}, plot_bgcolor='white')
 st.plotly_chart(fig_fora, use_container_width=True)
