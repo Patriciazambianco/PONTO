@@ -3,11 +3,23 @@ import pandas as pd
 import requests
 from io import BytesIO
 from datetime import datetime
+import plotly.express as px
 
 st.set_page_config(layout="wide")
-st.title("📊 Ranking de Horas Extras e Fora do Turno")
+st.title("📊 Relatório de Ponto")
 
 URL = "https://raw.githubusercontent.com/Patriciazambianco/PONTO/main/PONTO.xlsx"
+
+def minutos_para_hms(minutos):
+    try:
+        if minutos is None or pd.isna(minutos) or minutos <= 0:
+            return "00:00:00"
+        minutos_int = int(round(minutos))
+        h = minutos_int // 60
+        m = minutos_int % 60
+        return f"{h:02d}:{m:02d}:00"
+    except:
+        return "00:00:00"
 
 @st.cache_data
 def carregar_dados():
@@ -21,18 +33,8 @@ def carregar_dados():
     df['Saída 1'] = pd.to_datetime(df['Saída 1'], format='%H:%M:%S', errors='coerce').dt.time
     df['Turnos.ENTRADA'] = pd.to_datetime(df['Turnos.ENTRADA'], format='%H:%M', errors='coerce').dt.time
     df['Turnos.SAIDA'] = pd.to_datetime(df['Turnos.SAIDA'], format='%H:%M', errors='coerce').dt.time
-    return df
 
-def minutos_para_hms(minutos):
-    try:
-        if minutos is None or pd.isna(minutos) or minutos <= 0:
-            return "00:00:00"
-        minutos_int = int(round(minutos))
-        h = minutos_int // 60
-        m = minutos_int % 60
-        return f"{h:02d}:{m:02d}:00"
-    except:
-        return "00:00:00"
+    return df
 
 def diff_minutes(t1, t2):
     try:
@@ -43,7 +45,7 @@ def diff_minutes(t1, t2):
         return None
 
 @st.cache_data
-def preparar_df(df):
+def analisar_ponto(df):
     df['Minutos_entrada'] = df['Entrada 1'].apply(lambda t: t.hour * 60 + t.minute if pd.notnull(t) else None)
     df['Minutos_turno_entrada'] = df['Turnos.ENTRADA'].apply(lambda t: t.hour * 60 + t.minute if pd.notnull(t) else None)
     df['Minutos_turno_saida'] = df['Turnos.SAIDA'].apply(lambda t: t.hour * 60 + t.minute if pd.notnull(t) else None)
@@ -80,20 +82,20 @@ def preparar_df(df):
     return df
 
 df = carregar_dados()
-df = preparar_df(df)
+df = analisar_ponto(df)
 
 meses_disponiveis = sorted(df['Mes_Ano'].dropna().unique(), reverse=True)
 mes_selecionado = st.selectbox("Selecione o mês para análise:", meses_disponiveis)
 
 df_mes = df[df['Mes_Ano'] == mes_selecionado]
 
-# Preparar rankings
 ranking_horas = (
     df_mes[df_mes['Hora_extra']]
     .groupby('Nome')['Minutos_extras']
     .sum()
     .reset_index(name='Total_minutos_extras')
 )
+
 ranking_horas['Horas_fmt'] = ranking_horas['Total_minutos_extras'].apply(minutos_para_hms)
 ranking_horas = ranking_horas.sort_values(by='Total_minutos_extras', ascending=False)
 
@@ -105,7 +107,7 @@ ranking_fora_turno = (
 )
 ranking_fora_turno = ranking_fora_turno.sort_values(by='Dias_fora_turno', ascending=False)
 
-# Inicializa estado para armazenar seleção
+# Inicializa estado para seleção
 if 'selecionado_horas' not in st.session_state:
     st.session_state['selecionado_horas'] = None
 if 'selecionado_fora' not in st.session_state:
@@ -115,55 +117,96 @@ col1, col2 = st.columns(2)
 
 with col1:
     st.subheader(f"⏰ Ranking Horas Extras - {mes_selecionado}")
+
+    # Detalhes das horas extras em cima
+    if st.session_state['selecionado_horas']:
+        st.markdown(f"### Detalhes Horas Extras: {st.session_state['selecionado_horas']}")
+        detalhes_horas = df_mes[
+            (df_mes['Nome'] == st.session_state['selecionado_horas']) &
+            (df_mes['Hora_extra'])
+        ]
+        if not detalhes_horas.empty:
+            st.dataframe(
+                detalhes_horas[[
+                    'Data_fmt', 'Entrada_fmt', 'Saida_fmt',
+                    'Turnos.ENTRADA', 'Turnos.SAIDA', 'Minutos_extras'
+                ]].rename(columns={
+                    'Data_fmt': 'Data',
+                    'Entrada_fmt': 'Entrada',
+                    'Saida_fmt': 'Saída',
+                    'Turnos.ENTRADA': 'Turno Entrada',
+                    'Turnos.SAIDA': 'Turno Saída',
+                    'Minutos_extras': 'Minutos Extras'
+                }),
+                use_container_width=True
+            )
+        else:
+            st.write("Sem detalhes de horas extras para este funcionário no mês selecionado.")
+
+    # Botões ranking horas extras
     for idx, row in ranking_horas.iterrows():
         nome = row['Nome']
         horas = row['Horas_fmt']
         if st.button(f"{nome} — {horas}", key=f"horas_{idx}"):
             st.session_state['selecionado_horas'] = nome
+            st.session_state['selecionado_fora'] = None  # limpa seleção da outra coluna
 
-    if st.session_state['selecionado_horas']:
-        st.markdown(f"### Detalhes Horas Extras: {st.session_state['selecionado_horas']}")
-        detalhes = df_mes[(df_mes['Nome'] == st.session_state['selecionado_horas']) & (df_mes['Hora_extra'])]
-        if not detalhes.empty:
+with col2:
+    st.subheader(f"🚨 Ranking Fora do Turno - {mes_selecionado}")
+
+    # Detalhes jornadas fora do turno em cima
+    if st.session_state['selecionado_fora']:
+        st.markdown(f"### Detalhes Fora do Turno: {st.session_state['selecionado_fora']}")
+        detalhes_fora = df_mes[
+            (df_mes['Nome'] == st.session_state['selecionado_fora']) &
+            (df_mes['Entrada_fora_turno'])
+        ]
+        if not detalhes_fora.empty:
             st.dataframe(
-                detalhes[['Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Turnos.ENTRADA', 'Turnos.SAIDA', 'Minutos_extras']].rename(
-                    columns={
-                        'Data_fmt': 'Data',
-                        'Entrada_fmt': 'Entrada',
-                        'Saida_fmt': 'Saída',
-                        'Turnos.ENTRADA': 'Turno Entrada',
-                        'Turnos.SAIDA': 'Turno Saída',
-                        'Minutos_extras': 'Minutos Extras'
-                    }
-                ),
+                detalhes_fora[[
+                    'Data_fmt', 'Entrada_fmt', 'Saida_fmt',
+                    'Turnos.ENTRADA', 'Turnos.SAIDA'
+                ]].rename(columns={
+                    'Data_fmt': 'Data',
+                    'Entrada_fmt': 'Entrada',
+                    'Saida_fmt': 'Saída',
+                    'Turnos.ENTRADA': 'Turno Entrada',
+                    'Turnos.SAIDA': 'Turno Saída'
+                }),
                 use_container_width=True
             )
         else:
-            st.write("Sem detalhes para este funcionário no mês selecionado.")
+            st.write("Sem detalhes de jornadas fora do turno para este funcionário no mês selecionado.")
 
-with col2:
-    st.subheader(f"🚨 Ranking Dias Fora do Turno - {mes_selecionado}")
+    # Botões ranking fora do turno
     for idx, row in ranking_fora_turno.iterrows():
         nome = row['Nome']
         dias = row['Dias_fora_turno']
         if st.button(f"{nome} — {dias} dias", key=f"fora_{idx}"):
             st.session_state['selecionado_fora'] = nome
+            st.session_state['selecionado_horas'] = None  # limpa seleção da outra coluna
 
-    if st.session_state['selecionado_fora']:
-        st.markdown(f"### Detalhes Fora do Turno: {st.session_state['selecionado_fora']}")
-        detalhes = df_mes[(df_mes['Nome'] == st.session_state['selecionado_fora']) & (df_mes['Entrada_fora_turno'])]
-        if not detalhes.empty:
-            st.dataframe(
-                detalhes[['Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Turnos.ENTRADA', 'Turnos.SAIDA']].rename(
-                    columns={
-                        'Data_fmt': 'Data',
-                        'Entrada_fmt': 'Entrada',
-                        'Saida_fmt': 'Saída',
-                        'Turnos.ENTRADA': 'Turno Entrada',
-                        'Turnos.SAIDA': 'Turno Saída',
-                    }
-                ),
-                use_container_width=True
-            )
-        else:
-            st.write("Sem detalhes para este funcionário no mês selecionado.")
+# Gráficos de barras abaixo dos rankings, se quiser depois pode comentar se não quiser repetir visual
+fig_horas = px.bar(
+    ranking_horas,
+    x='Total_minutos_extras',
+    y='Nome',
+    orientation='h',
+    labels={'Total_minutos_extras': 'Minutos', 'Nome': 'Funcionário'},
+    title='Minutos de Horas Extras por Funcionário',
+    text=ranking_horas['Horas_fmt']
+)
+fig_horas.update_layout(yaxis={'categoryorder': 'total ascending'}, plot_bgcolor='white')
+st.plotly_chart(fig_horas, use_container_width=True)
+
+fig_fora = px.bar(
+    ranking_fora_turno,
+    x='Dias_fora_turno',
+    y='Nome',
+    orientation='h',
+    labels={'Dias_fora_turno': 'Dias Fora do Turno', 'Nome': 'Funcionário'},
+    title='Dias Fora do Turno por Funcionário',
+    text=ranking_fora_turno['Dias_fora_turno']
+)
+fig_fora.update_layout(yaxis={'categoryorder': 'total ascending'}, plot_bgcolor='white')
+st.plotly_chart(fig_fora, use_container_width=True)
