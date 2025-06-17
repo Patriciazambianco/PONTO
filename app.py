@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import requests
 from io import BytesIO
-from datetime import datetime, timedelta
+from datetime import datetime
 
 st.set_page_config(layout="wide")
 st.title("📊 Relatório de Ponto - Horas Extras e Fora do Turno")
@@ -105,40 +105,45 @@ ranking_fora_turno = (
     .head(20)
 )
 
-# Detalhes selecionados
 col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("Top 20 Horas Extras (h)")
     pd.set_option('display.max_colwidth', None)
-    selecionado_horas = st.selectbox("Selecionar Funcionário para Detalhes de Horas Extras:", ranking_horas['Nome'].tolist())
-    st.dataframe(ranking_horas.rename(columns={'Nome': 'Funcionário', 'Horas_extras': 'Horas Extras (h)'}), use_container_width=True)
-
-    detalhes_horas = df_mes[(df_mes['Nome'] == selecionado_horas) & (df_mes['Hora_extra_flag'])][
-        ['Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Horas_extras']]
-    detalhes_horas = detalhes_horas.rename(columns={
-        'Data_fmt': 'Data',
-        'Entrada_fmt': 'Entrada',
-        'Saida_fmt': 'Saída',
-        'Horas_extras': 'Horas Extras (h)'
-    })
-    st.subheader(f"Detalhes Horas Extras - {selecionado_horas}")
-    st.dataframe(detalhes_horas, use_container_width=True)
+    selecionado_horas = st.selectbox("Selecionar Funcionário para Detalhes de Horas Extras:", ranking_horas['Nome'].tolist(), key='hora')
+    
+    c1_h, c2_h = st.columns([1,1])
+    with c1_h:
+        st.dataframe(ranking_horas.rename(columns={'Nome': 'Funcionário', 'Horas_extras': 'Horas Extras (h)'}), use_container_width=True)
+    with c2_h:
+        detalhes_horas = df_mes[(df_mes['Nome'] == selecionado_horas) & (df_mes['Hora_extra_flag'])][
+            ['Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Horas_extras']]
+        detalhes_horas = detalhes_horas.rename(columns={
+            'Data_fmt': 'Data',
+            'Entrada_fmt': 'Entrada',
+            'Saida_fmt': 'Saída',
+            'Horas_extras': 'Horas Extras (h)'
+        })
+        st.subheader(f"Detalhes Horas Extras - {selecionado_horas}")
+        st.dataframe(detalhes_horas, use_container_width=True)
 
 with col2:
     st.subheader("Top 20 Fora do Turno (dias)")
     pd.set_option('display.max_colwidth', None)
-    selecionado_fora = st.selectbox("Selecionar Funcionário para Detalhes Fora do Turno:", ranking_fora_turno['Nome'].tolist())
-    st.dataframe(ranking_fora_turno.rename(columns={'Nome': 'Funcionário', 'Dias_fora_turno': 'Dias Fora do Turno'}), use_container_width=True)
-
-    detalhes_fora = df_mes[(df_mes['Nome'] == selecionado_fora) & (df_mes['Entrada_fora_turno'])][
-        ['Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Turnos.ENTRADA', 'Turnos.SAIDA']]
-    detalhes_fora = detalhes_fora.rename(columns={
-        'Data_fmt': 'Data',
-        'Entrada_fmt': 'Entrada Real',
-        'Saida_fmt': 'Saída Real',
-        'Turnos.ENTRADA': 'Jornada Início',
-        'Turnos.SAIDA': 'Jornada Fim'
-    })
-    st.subheader(f"Detalhes Fora do Turno - {selecionado_fora}")
-    st.dataframe(detalhes_fora, use_container_width=True)
+    selecionado_fora = st.selectbox("Selecionar Funcionário para Detalhes Fora do Turno:", ranking_fora_turno['Nome'].tolist(), key='fora')
+    
+    c1_f, c2_f = st.columns([1,1])
+    with c1_f:
+        st.dataframe(ranking_fora_turno.rename(columns={'Nome': 'Funcionário', 'Dias_fora_turno': 'Dias Fora do Turno'}), use_container_width=True)
+    with c2_f:
+        detalhes_fora = df_mes[(df_mes['Nome'] == selecionado_fora) & (df_mes['Entrada_fora_turno'])][
+            ['Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Turnos.ENTRADA', 'Turnos.SAIDA']]
+        detalhes_fora = detalhes_fora.rename(columns={
+            'Data_fmt': 'Data',
+            'Entrada_fmt': 'Entrada Real',
+            'Saida_fmt': 'Saída Real',
+            'Turnos.ENTRADA': 'Jornada Início',
+            'Turnos.SAIDA': 'Jornada Fim'
+        })
+        st.subheader(f"Detalhes Fora do Turno - {selecionado_fora}")
+        st.dataframe(detalhes_fora, use_container_width=True)
