@@ -69,22 +69,33 @@ def analisar_ponto(df):
     df['Entrada_fmt'] = df['Entrada 1'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
     df['Saida_fmt'] = df['Saída 1'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
 
-    return df
+    # Criar coluna Turno formatado (entrada - saída do turno)
+    df['Turno_fmt'] = df.apply(
+        lambda row: f"{row['Turnos.ENTRADA'].strftime('%H:%M') if pd.notnull(row['Turnos.ENTRADA']) else ''} - "
+                    f"{row['Turnos.SAIDA'].strftime('%H:%M') if pd.notnull(row['Turnos.SAIDA']) else ''}",
+        axis=1
+    )
 
-def minutes_to_hms(minutos):
-    try:
-        if minutos is None or pd.isna(minutos) or minutos <= 0:
+    # Formatar minutos extras para exibir horas:minutos:segundos
+    def minutos_para_hms(minutos):
+        try:
+            if minutos is None or pd.isna(minutos) or minutos <= 0:
+                return "00:00:00"
+            minutos_int = int(round(minutos))
+            h = minutos_int // 60
+            m = minutos_int % 60
+            return f"{h:02d}:{m:02d}:00"
+        except:
             return "00:00:00"
-        minutos_int = int(round(minutos))
-        h = minutos_int // 60
-        m = minutos_int % 60
-        return f"{h:02d}:{m:02d}:00"
-    except Exception:
-        return "00:00:00"
+
+    df['Minutos_extras_fmt'] = df['Minutos_extras'].apply(minutos_para_hms)
+
+    return df
 
 df = carregar_dados()
 df = analisar_ponto(df)
 
+# Seleção de mês no topo
 meses_disponiveis = sorted(df['Mes_Ano'].dropna().unique(), reverse=True)
 mes_selecionado = st.selectbox("Selecione o mês para análise:", meses_disponiveis)
 
@@ -98,7 +109,7 @@ ranking_horas = (
     .reset_index(name='Total_minutos_extras')
 )
 
-ranking_horas['Horas_fmt'] = ranking_horas['Total_minutos_extras'].apply(minutes_to_hms)
+ranking_horas['Horas_fmt'] = ranking_horas['Total_minutos_extras'].apply(lambda x: minutos_para_hms(x))
 ranking_horas = ranking_horas.sort_values(by='Total_minutos_extras', ascending=False)
 
 ranking_fora_turno = (
@@ -126,33 +137,24 @@ with col2:
         use_container_width=True
     )
 
+# Detalhamento dos 50 maiores ofensores por horas extras
 st.markdown("---")
-st.subheader(f"🔍 Detalhamento dos principais ofensores ({mes_selecionado})")
+st.subheader(f"🔍 Detalhamento dos 50 maiores ofensores em horas extras ({mes_selecionado})")
 
-# Top ofensores em horas extras
-top_horas = ranking_horas.head(50)['Nome'].tolist()
-# Top ofensores em dias fora do turno
-top_fora_turno = ranking_fora_turno.head(50)['Nome'].tolist()
+top50 = ranking_horas.head(50)['Nome'].tolist()
+df_offenders = df_mes[(df_mes['Nome'].isin(top50)) & (df_mes['Hora_extra'] | df_mes['Entrada_fora_turno'])]
 
-# União dos dois grupos
-top_ofensores = list(set(top_horas + top_fora_turno))
-
-df_offenders = df_mes[df_mes['Nome'].isin(top_ofensores) & ((df_mes['Hora_extra']) | (df_mes['Entrada_fora_turno']))]
-
-df_offenders['Minutos_extras_fmt'] = df_offenders['Minutos_extras'].apply(minutes_to_hms)
-df_offenders['Data_fmt'] = df_offenders['Data'].dt.strftime('%d/%m/%Y')
-df_offenders['Entrada_fmt'] = df_offenders['Entrada 1'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
-df_offenders['Saida_fmt'] = df_offenders['Saída 1'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
-
-for nome in top_ofensores:
+# Mostrar detalhes em expanders com turno incluído
+for nome in top50:
     df_func = df_offenders[df_offenders['Nome'] == nome]
     if df_func.empty:
         continue
     with st.expander(f"{nome} - {len(df_func)} infrações"):
         st.dataframe(
-            df_func[['Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Hora_extra', 'Entrada_fora_turno', 'Minutos_extras_fmt']].rename(
+            df_func[['Data_fmt', 'Turno_fmt', 'Entrada_fmt', 'Saida_fmt', 'Hora_extra', 'Entrada_fora_turno', 'Minutos_extras_fmt']].rename(
                 columns={
                     'Data_fmt': 'Data',
+                    'Turno_fmt': 'Turno',
                     'Entrada_fmt': 'Entrada',
                     'Saida_fmt': 'Saída',
                     'Hora_extra': 'Hora Extra',
