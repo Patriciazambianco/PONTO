@@ -3,24 +3,16 @@ import pandas as pd
 import requests
 from io import BytesIO
 from datetime import datetime
-import xlsxwriter
-import plotly.express as px
 
 st.set_page_config(layout="wide")
-st.title("📊 Relatório de Ponto - Ofensores")
+st.title("📊 Relatório de Ponto - Filtro por Coordenador e Tendência Semanal")
 
 URL = "https://raw.githubusercontent.com/Patriciazambianco/PONTO/main/PONTO.xlsx"
-
-def minutos_para_hms(minutos):
-    if pd.isnull(minutos) or minutos <= 0:
-        return "00:00:00"
-    h = int(minutos // 60)
-    m = int(minutos % 60)
-    return f"{h:02d}:{m:02d}:00"
 
 @st.cache_data
 def carregar_dados():
     response = requests.get(URL)
+    response.raise_for_status()
     arquivo_excel = BytesIO(response.content)
     df = pd.read_excel(arquivo_excel)
 
@@ -33,62 +25,71 @@ def carregar_dados():
 
 def diff_minutes(t1, t2):
     try:
-        dt1 = pd.Timedelta(hours=t1.hour, minutes=t1.minute)
-        dt2 = pd.Timedelta(hours=t2.hour, minutes=t2.minute)
-        return int((dt2 - dt1).total_seconds() // 60)
+        dt1 = pd.Timedelta(hours=t1.hour, minutes=t1.minute, seconds=t1.second)
+        dt2 = pd.Timedelta(hours=t2.hour, minutes=t2.minute, seconds=t2.second)
+        return int((dt2 - dt1).total_seconds() / 60)
     except:
         return None
 
+def minutos_para_horas(minutos):
+    try:
+        if minutos is None or pd.isna(minutos) or minutos <= 0:
+            return 0
+        return round(minutos / 60, 2)
+    except:
+        return 0
+
 @st.cache_data
 def analisar_ponto(df):
-    df['Mes_Ano'] = df['Data'].dt.to_period('M').astype(str)
-    df['Dia_Semana'] = df['Data'].dt.day_name()
     df['Minutos_entrada'] = df['Entrada 1'].apply(lambda t: t.hour * 60 + t.minute if pd.notnull(t) else None)
     df['Minutos_turno_entrada'] = df['Turnos.ENTRADA'].apply(lambda t: t.hour * 60 + t.minute if pd.notnull(t) else None)
     df['Minutos_turno_saida'] = df['Turnos.SAIDA'].apply(lambda t: t.hour * 60 + t.minute if pd.notnull(t) else None)
 
     df['Entrada_fora_turno'] = df.apply(
-        lambda row: abs(row['Minutos_entrada'] - row['Minutos_turno_entrada']) > 60
-        if pd.notnull(row['Minutos_entrada']) and pd.notnull(row['Minutos_turno_entrada']) else False,
+        lambda row: (
+            row['Minutos_entrada'] is not None and
+            row['Minutos_turno_entrada'] is not None and
+            abs(row['Minutos_entrada'] - row['Minutos_turno_entrada']) > 60
+        ),
         axis=1
     )
 
     df['Minutos_trabalhados'] = df.apply(
-        lambda row: diff_minutes(row['Entrada 1'], row['Saída 1']) if pd.notnull(row['Entrada 1']) and pd.notnull(row['Saída 1']) else None,
+        lambda row: diff_minutes(row['Entrada 1'], row['Saída 1']) if row['Entrada 1'] and row['Saída 1'] else None,
         axis=1
     )
 
     df['Minutos_extras'] = df.apply(
         lambda row: row['Minutos_trabalhados'] - (row['Minutos_turno_saida'] - row['Minutos_turno_entrada'])
-        if pd.notnull(row['Minutos_trabalhados']) and pd.notnull(row['Minutos_turno_saida']) and pd.notnull(row['Minutos_turno_entrada']) else 0,
+        if row['Minutos_trabalhados'] is not None and row['Minutos_turno_saida'] is not None and row['Minutos_turno_entrada'] is not None
+        else 0,
         axis=1
     )
 
     df['Hora_extra'] = df['Minutos_extras'] > 15
-    df['Data_fmt'] = df['Data'].dt.strftime('%d/%m')
-    df['Entrada_fmt'] = df['Entrada 1'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
-    df['Saida_fmt'] = df['Saída 1'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
+    df['Mes_Ano'] = df['Data'].dt.to_period('M').astype(str)
+    df['Dia_semana'] = df['Data'].dt.day_name(locale='pt_BR')
     return df
 
-# Carga e tratamento de dados
-df = carregar_dados()
-df = analisar_ponto(df)
+# Carregamento e análise
+with st.spinner("Carregando e analisando os dados..."):
+    df = carregar_dados()
+    df = analisar_ponto(df)
 
-meses = sorted(df['Mes_Ano'].unique(), reverse=True)
-mes = st.selectbox("Selecione o mês:", meses)
-coordenadores = sorted(df['MICROSIGA.COORDENADOR_IMEDIATO'].dropna().unique())
-coord = st.selectbox("Filtrar por coordenador:", ["Todos"] + coordenadores)
+# Filtro por coordenador
+coordenadores = df['MICROSIGA.COORDENADOR_IMEDIATO'].dropna().unique()
+coord_selecionado = st.selectbox("Selecione o coordenador:", sorted(coordenadores))
 
-filtro = (df['Mes_Ano'] == mes)
-if coord != "Todos":
-    filtro &= (df['MICROSIGA.COORDENADOR_IMEDIATO'] == coord)
+filtro_df = df[df['MICROSIGA.COORDENADOR_IMEDIATO'] == coord_selecionado]
 
-df_mes = df[filtro]
-
-# Tendência semanal
-graf_dia = df_mes[df_mes['Hora_extra']].groupby('Dia_Semana')['Minutos_extras'].sum().reset_index()
-graf_dia['Horas'] = graf_dia['Minutos_extras'].apply(lambda x: round(x / 60, 1))
-fig = px.bar(graf_dia, x='Dia_Semana', y='Horas', title='Tendência Semanal - Horas Extras por Dia da Semana', text='Horas')
-st.plotly_chart(fig, use_container_width=True)
-
-# Continuar com rankings e detalhamento como antes...
+# Tendência por semana
+st.subheader(f"Tendência semanal de Horas Extras - {coord_selecionado}")
+tendencia = (
+    filtro_df[filtro_df['Hora_extra']]
+    .groupby(['Dia_semana'])['Minutos_extras']
+    .sum()
+    .reset_index(name='Total_minutos')
+)
+tendencia['Horas'] = tendencia['Total_minutos'].apply(minutos_para_horas)
+tendencia = tendencia.sort_values(by='Horas', ascending=False)
+st.dataframe(tendencia, use_container_width=True)
