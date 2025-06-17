@@ -1,132 +1,179 @@
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timedelta
+import requests
+from io import BytesIO
+from datetime import datetime
+import plotly.express as px
 
-# Função para carregar dados e preparar as colunas
+st.set_page_config(layout="wide")
+st.title("📊 Relatório de Ponto")
+
+URL = "https://raw.githubusercontent.com/Patriciazambianco/PONTO/main/PONTO.xlsx"
+
 @st.cache_data
 def carregar_dados():
-    # Troque pelo seu caminho/URL do Excel
-    df = pd.read_excel("PONTO.xlsx")
+    response = requests.get(URL)
+    response.raise_for_status()
+    arquivo_excel = BytesIO(response.content)
+    df = pd.read_excel(arquivo_excel)
 
-    # Converter datas e horas para datetime
-    df['Data'] = pd.to_datetime(df['Data'])
-    df['Entrada'] = pd.to_datetime(df['Entrada 1'], errors='coerce').dt.time
-    df['Saida'] = pd.to_datetime(df['Saída 1'], errors='coerce').dt.time
-
-    # Turno (colunas Turnos.ENTRADA e Turnos.SAIDA como datetime)
-    df['Turnos.ENTRADA'] = pd.to_datetime(df['Turnos.ENTRADA'], errors='coerce').dt.time
-    df['Turnos.SAIDA'] = pd.to_datetime(df['Turnos.SAIDA'], errors='coerce').dt.time
-
-    # Calcular minutos extras (simplificado, ajustar conforme regras)
-    def calc_minutos_extras(row):
-        if pd.isna(row['Entrada']) or pd.isna(row['Saida']) or pd.isna(row['Turnos.ENTRADA']) or pd.isna(row['Turnos.SAIDA']):
-            return 0
-        inicio_turno = datetime.combine(datetime.min, row['Turnos.ENTRADA'])
-        fim_turno = datetime.combine(datetime.min, row['Turnos.SAIDA'])
-        entrada = datetime.combine(datetime.min, row['Entrada'])
-        saida = datetime.combine(datetime.min, row['Saida'])
-
-        # Se saída menor que entrada, assume trabalho até depois da meia-noite
-        if saida < entrada:
-            saida += timedelta(days=1)
-        if fim_turno < inicio_turno:
-            fim_turno += timedelta(days=1)
-
-        # Calcular minutos fora do turno (antes do início e depois do fim)
-        minutos_antes = max(0, (inicio_turno - entrada).total_seconds() / 60)
-        minutos_depois = max(0, (saida - fim_turno).total_seconds() / 60)
-
-        return minutos_antes + minutos_depois
-
-    df['Minutos_extras'] = df.apply(calc_minutos_extras, axis=1)
-
-    # Marcar infração de horário fora do turno (entrada ou saída fora do esperado)
-    df['Fora_turno'] = df['Minutos_extras'] > 0
+    df['Data'] = pd.to_datetime(df['Data'], dayfirst=True, errors='coerce')
+    df['Entrada 1'] = pd.to_datetime(df['Entrada 1'], format='%H:%M:%S', errors='coerce').dt.time
+    df['Saída 1'] = pd.to_datetime(df['Saída 1'], format='%H:%M:%S', errors='coerce').dt.time
+    df['Turnos.ENTRADA'] = pd.to_datetime(df['Turnos.ENTRADA'], format='%H:%M', errors='coerce').dt.time
+    df['Turnos.SAIDA'] = pd.to_datetime(df['Turnos.SAIDA'], format='%H:%M', errors='coerce').dt.time
 
     return df
 
-# Função para converter minutos em HH:mm:ss
-def minutos_para_hms(minutos):
-    if minutos is None or minutos == 0:
+def diff_minutes(t1, t2):
+    try:
+        dt1 = pd.Timedelta(hours=t1.hour, minutes=t1.minute, seconds=t1.second)
+        dt2 = pd.Timedelta(hours=t2.hour, minutes=t2.minute, seconds=t2.second)
+        return int((dt2 - dt1).total_seconds() / 60)
+    except:
+        return None
+
+@st.cache_data
+def analisar_ponto(df):
+    df['Minutos_entrada'] = df['Entrada 1'].apply(lambda t: t.hour * 60 + t.minute if pd.notnull(t) else None)
+    df['Minutos_turno_entrada'] = df['Turnos.ENTRADA'].apply(lambda t: t.hour * 60 + t.minute if pd.notnull(t) else None)
+    df['Minutos_turno_saida'] = df['Turnos.SAIDA'].apply(lambda t: t.hour * 60 + t.minute if pd.notnull(t) else None)
+
+    df['Entrada_fora_turno'] = df.apply(
+        lambda row: (
+            row['Minutos_entrada'] is not None and
+            row['Minutos_turno_entrada'] is not None and
+            abs(row['Minutos_entrada'] - row['Minutos_turno_entrada']) > 60
+        ),
+        axis=1
+    )
+
+    df['Minutos_trabalhados'] = df.apply(
+        lambda row: diff_minutes(row['Entrada 1'], row['Saída 1']) if row['Entrada 1'] and row['Saída 1'] else None,
+        axis=1
+    )
+
+    df['Minutos_extras'] = df.apply(
+        lambda row: row['Minutos_trabalhados'] - (row['Minutos_turno_saida'] - row['Minutos_turno_entrada'])
+        if row['Minutos_trabalhados'] is not None and row['Minutos_turno_saida'] is not None and row['Minutos_turno_entrada'] is not None
+        else 0,
+        axis=1
+    )
+
+    df['Hora_extra'] = df['Minutos_extras'] > 15
+
+    df['Mes_Ano'] = df['Data'].dt.to_period('M').astype(str)
+
+    # Formatação para exibição
+    df['Data_fmt'] = df['Data'].dt.strftime('%d/%m')
+    df['Entrada_fmt'] = df['Entrada 1'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
+    df['Saida_fmt'] = df['Saída 1'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
+
+    return df
+
+def minutes_to_hms(minutos):
+    try:
+        if minutos is None or pd.isna(minutos) or minutos <= 0:
+            return "00:00:00"
+        minutos_int = int(round(minutos))
+        h = minutos_int // 60
+        m = minutos_int % 60
+        return f"{h:02d}:{m:02d}:00"
+    except Exception:
         return "00:00:00"
-    h = int(minutos // 60)
-    m = int(minutos % 60)
-    return f"{h:02d}:{m:02d}:00"
 
-# Formatar turno para exibição
-def formatar_turno(row):
-    entrada = row['Turnos.ENTRADA']
-    saida = row['Turnos.SAIDA']
-    if pd.isna(entrada) or pd.isna(saida):
-        return "Não informado"
-    return f"{entrada.strftime('%H:%M')} - {saida.strftime('%H:%M')}"
-
-# Carregar dados
 df = carregar_dados()
+df = analisar_ponto(df)
 
-# Criar coluna Mês para filtro
-df['Mes'] = df['Data'].dt.strftime('%Y-%m')
+# Seleção de mês no topo
+meses_disponiveis = sorted(df['Mes_Ano'].dropna().unique(), reverse=True)
+mes_selecionado = st.selectbox("Selecione o mês para análise:", meses_disponiveis)
 
-# Interface
-st.title("Ranking de Horas Extras e Infrações Fora do Turno")
+df_mes = df[df['Mes_Ano'] == mes_selecionado]
 
-# Filtros topo
-meses = sorted(df['Mes'].unique(), reverse=True)
-mes_selecionado = st.selectbox("Selecione o mês:", meses)
-
-df_mes = df[df['Mes'] == mes_selecionado]
-
-tipo_infracao = st.radio("Tipo de infração:", options=["Todas", "Horas Extras", "Fora do Turno"], horizontal=True)
-
-if tipo_infracao == "Horas Extras":
-    df_filtrado = df_mes[df_mes['Minutos_extras'] > 0]
-elif tipo_infracao == "Fora do Turno":
-    df_filtrado = df_mes[df_mes['Fora_turno'] == True]
-else:
-    df_filtrado = df_mes.copy()
-
-# Ranking por funcionário (somar minutos extras)
-ranking = df_filtrado.groupby('Nome', as_index=False).agg(
-    Total_minutos_extras=('Minutos_extras', 'sum'),
-    Dias_fora_turno=('Fora_turno', 'sum')
+# Rankings
+ranking_horas = (
+    df_mes[df_mes['Hora_extra']]
+    .groupby('Nome')['Minutos_extras']
+    .sum()
+    .reset_index(name='Total_minutos_extras')
 )
 
-# Ordenar por minutos extras decrescente
-ranking = ranking.sort_values('Total_minutos_extras', ascending=False).head(50)
+ranking_horas['Horas_fmt'] = ranking_horas['Total_minutos_extras'].apply(minutes_to_hms)
+ranking_horas = ranking_horas.sort_values(by='Total_minutos_extras', ascending=False)
 
-# Mostrar ranking com horas no formato HH:mm:ss
-ranking['Horas Extras'] = ranking['Total_minutos_extras'].apply(minutos_para_hms)
-
-st.subheader("Ranking dos 50 maiores ofensores")
-st.dataframe(ranking[['Nome', 'Horas Extras', 'Dias_fora_turno']].rename(columns={
-    'Nome': 'Funcionário',
-    'Horas Extras': 'Horas Extras (HH:mm:ss)',
-    'Dias_fora_turno': 'Dias Fora do Turno'
-}), use_container_width=True)
-
-# Detalhamento dos ofensores
-st.subheader("Detalhamento dos 50 maiores ofensores")
-
-# Pega registros só desses 50 nomes
-ofensores = ranking['Nome'].tolist()
-df_ofensores = df_filtrado[df_filtrado['Nome'].isin(ofensores)].copy()
-
-# Formatando colunas para exibição
-df_ofensores['Data_fmt'] = df_ofensores['Data'].dt.strftime('%d/%m/%Y')
-df_ofensores['Entrada_fmt'] = df_ofensores['Entrada'].apply(lambda x: x.strftime('%H:%M') if pd.notna(x) else '-')
-df_ofensores['Saida_fmt'] = df_ofensores['Saida'].apply(lambda x: x.strftime('%H:%M') if pd.notna(x) else '-')
-df_ofensores['Horas_extras'] = df_ofensores['Minutos_extras'].apply(minutos_para_hms)
-df_ofensores['Turno_fmt'] = df_ofensores.apply(formatar_turno, axis=1)
-
-# Mostrar tabela detalhada
-st.dataframe(
-    df_ofensores[['Nome', 'Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Horas_extras', 'Turno_fmt']].rename(columns={
-        'Nome': 'Funcionário',
-        'Data_fmt': 'Data',
-        'Entrada_fmt': 'Entrada',
-        'Saida_fmt': 'Saída',
-        'Horas_extras': 'Horas Extras',
-        'Turno_fmt': 'Turno'
-    }),
-    use_container_width=True
+ranking_fora_turno = (
+    df_mes[df_mes['Entrada_fora_turno']]
+    .groupby('Nome')
+    .size()
+    .reset_index(name='Dias_fora_turno')
 )
+ranking_fora_turno = ranking_fora_turno.sort_values(by='Dias_fora_turno', ascending=False)
+
+# Mostrar os rankings lado a lado
+col1, col2 = st.columns(2)
+
+with col1:
+    st.subheader(f"⏰ Ranking - Total de Horas Extras ({mes_selecionado})")
+    st.dataframe(
+        ranking_horas.rename(columns={'Nome': 'Funcionário', 'Horas_fmt': 'Horas Extras'}),
+        use_container_width=True
+    )
+
+with col2:
+    st.subheader(f"🚨 Ranking - Dias Fora do Turno ({mes_selecionado})")
+    st.dataframe(
+        ranking_fora_turno.rename(columns={'Nome': 'Funcionário'}),
+        use_container_width=True
+    )
+
+# Detalhamento dos 50 maiores ofensores por horas extras
+st.markdown("---")
+st.subheader(f"🔍 Detalhamento dos 50 maiores ofensores em horas extras ({mes_selecionado})")
+
+top50 = ranking_horas.head(50)['Nome'].tolist()
+df_offenders = df_mes[(df_mes['Nome'].isin(top50)) & (df_mes['Hora_extra'] | df_mes['Entrada_fora_turno'])]
+
+# Mostrar detalhes em expanders
+for nome in top50:
+    df_func = df_offenders[df_offenders['Nome'] == nome]
+    if df_func.empty:
+        continue
+    with st.expander(f"{nome} - {len(df_func)} infrações"):
+        st.dataframe(
+            df_func[['Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Hora_extra', 'Entrada_fora_turno']].rename(
+                columns={
+                    'Data_fmt': 'Data',
+                    'Entrada_fmt': 'Entrada',
+                    'Saida_fmt': 'Saída',
+                    'Hora_extra': 'Hora Extra',
+                    'Entrada_fora_turno': 'Fora do Turno'
+                }
+            ),
+            use_container_width=True
+        )
+
+# Gráficos limpos
+fig_horas = px.bar(
+    ranking_horas,
+    x='Total_minutos_extras',
+    y='Nome',
+    orientation='h',
+    labels={'Total_minutos_extras': 'Minutos', 'Nome': 'Funcionário'},
+    title='Minutos de Horas Extras por Funcionário',
+    text=ranking_horas['Horas_fmt']
+)
+fig_horas.update_layout(yaxis={'categoryorder':'total ascending'}, plot_bgcolor='white')
+st.plotly_chart(fig_horas, use_container_width=True)
+
+fig_fora = px.bar(
+    ranking_fora_turno,
+    x='Dias_fora_turno',
+    y='Nome',
+    orientation='h',
+    labels={'Dias_fora_turno': 'Dias Fora do Turno', 'Nome': 'Funcionário'},
+    title='Dias Fora do Turno por Funcionário',
+    text=ranking_fora_turno['Dias_fora_turno']
+)
+fig_fora.update_layout(yaxis={'categoryorder':'total ascending'}, plot_bgcolor='white')
+st.plotly_chart(fig_fora, use_container_width=True)
