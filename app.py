@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import requests
 from io import BytesIO
-from datetime import datetime
 
 st.title("Resumo Básico: Horas Extras e Entrada Fora da Jornada")
 
@@ -29,25 +28,26 @@ def diff_minutes(t1, t2):
         dt2 = pd.Timedelta(hours=t2.hour, minutes=t2.minute, seconds=t2.second)
         return int((dt2 - dt1).total_seconds() / 60)
     except:
-        return None
+        return 0
 
 def minutos_para_horas(minutos):
-    if minutos is None or minutos <= 0:
+    if minutos is None or pd.isna(minutos) or minutos <= 0:
         return "0:00"
-    h = minutos // 60
-    m = minutos % 60
+    h = int(minutos) // 60
+    m = int(minutos) % 60
     return f"{h}:{m:02d}"
 
 @st.cache_data
 def preparar_dados(df):
     df['Mes_Ano'] = df['Data'].dt.to_period('M').astype(str)
-    
+
     df['Minutos_entrada'] = df['Entrada 1'].apply(lambda t: t.hour*60 + t.minute if pd.notnull(t) else None)
     df['Minutos_turno_entrada'] = df['Turnos.ENTRADA'].apply(lambda t: t.hour*60 + t.minute if pd.notnull(t) else None)
     df['Minutos_turno_saida'] = df['Turnos.SAIDA'].apply(lambda t: t.hour*60 + t.minute if pd.notnull(t) else None)
 
     df['Entrada_fora_turno'] = df.apply(
-        lambda r: abs(r['Minutos_entrada'] - r['Minutos_turno_entrada']) > 60 if (r['Minutos_entrada'] is not None and r['Minutos_turno_entrada'] is not None) else False,
+        lambda r: abs(r['Minutos_entrada'] - r['Minutos_turno_entrada']) > 60
+        if (r['Minutos_entrada'] is not None and r['Minutos_turno_entrada'] is not None) else False,
         axis=1
     )
 
@@ -57,12 +57,13 @@ def preparar_dados(df):
     )
 
     df['Minutos_esperados'] = df.apply(
-        lambda r: r['Minutos_turno_saida'] - r['Minutos_turno_entrada'] if (r['Minutos_turno_saida'] is not None and r['Minutos_turno_entrada'] is not None) else 0,
+        lambda r: r['Minutos_turno_saida'] - r['Minutos_turno_entrada']
+        if (r['Minutos_turno_saida'] is not None and r['Minutos_turno_entrada'] is not None) else 0,
         axis=1
     )
 
     df['Minutos_extras'] = df['Minutos_trabalhados'] - df['Minutos_esperados']
-    df['Minutos_extras'] = df['Minutos_extras'].apply(lambda x: x if x > 15 else 0)  # Só considera extras > 15 min
+    df['Minutos_extras'] = df['Minutos_extras'].apply(lambda x: x if x > 15 else 0)
 
     return df
 
