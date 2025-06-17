@@ -10,6 +10,17 @@ st.title("📊 Relatório de Ponto")
 
 URL = "https://raw.githubusercontent.com/Patriciazambianco/PONTO/main/PONTO.xlsx"
 
+def minutos_para_hms(minutos):
+    try:
+        if minutos is None or pd.isna(minutos) or minutos <= 0:
+            return "00:00:00"
+        minutos_int = int(round(minutos))
+        h = minutos_int // 60
+        m = minutos_int % 60
+        return f"{h:02d}:{m:02d}:00"
+    except:
+        return "00:00:00"
+
 @st.cache_data
 def carregar_dados():
     response = requests.get(URL)
@@ -61,59 +72,106 @@ def analisar_ponto(df):
     )
 
     df['Hora_extra'] = df['Minutos_extras'] > 15
-
     df['Mes_Ano'] = df['Data'].dt.to_period('M').astype(str)
-
-    # Formatação para exibição
     df['Data_fmt'] = df['Data'].dt.strftime('%d/%m')
     df['Entrada_fmt'] = df['Entrada 1'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
     df['Saida_fmt'] = df['Saída 1'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
-    df['Turno_fmt'] = df['Turnos.ENTRADA'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '') + " - " + df['Turnos.SAIDA'].apply(lambda x: x.strftime('%H:%M') if pd.notnull(x) else '')
 
     return df
 
-def minutes_to_hms(minutos):
-    try:
-        if minutos is None or pd.isna(minutos) or minutos <= 0:
-            return "00:00:00"
-        minutos_int = int(round(minutos))
-        h = minutos_int // 60
-        m = minutos_int % 60
-        return f"{h:02d}:{m:02d}:00"
-    except Exception:
-        return "00:00:00"
-
-# Carregar e processar os dados
+# Carregar e analisar dados
 df = carregar_dados()
 df = analisar_ponto(df)
 
-# --- ABA TABELA RESUMO ---
-st.markdown("## 📆 Tabela Resumo por Funcionário")
-meses = ['2024-03', '2024-04', '2024-05', '2024-06']
-resumo = df[df['Mes_Ano'].isin(meses)].copy()
-resumo['Horas_fmt'] = resumo['Minutos_extras'].apply(minutes_to_hms)
+# Seleção de mês
+meses_disponiveis = sorted(df['Mes_Ano'].dropna().unique(), reverse=True)
+mes_selecionado = st.selectbox("Selecione o mês para análise:", meses_disponiveis)
+df_mes = df[df['Mes_Ano'] == mes_selecionado]
 
-# Agregação
-tabela = resumo.groupby('Nome').agg({
-    'Minutos_extras': 'sum',
-    'Turno_fmt': 'first'
-}).reset_index()
-tabela['Total_Horas_Extras'] = tabela['Minutos_extras'].apply(minutes_to_hms)
-
-for mes in meses:
-    mes_df = resumo[resumo['Mes_Ano'] == mes].groupby('Nome')['Minutos_extras'].sum().apply(minutes_to_hms)
-    tabela[mes] = tabela['Nome'].map(mes_df)
-
-# Deslocamentos
-deslocamentos = resumo[resumo['Entrada_fora_turno']].groupby('Nome')['Data_fmt'].apply(list).reset_index(name='Deslocamentos')
-tabela = tabela.merge(deslocamentos, on='Nome', how='left')
-
-st.dataframe(tabela[['Nome', 'Turno_fmt', 'Total_Horas_Extras'] + meses + ['Deslocamentos']], use_container_width=True)
-
-# Botão de download
-st.download_button(
-    label="📥 Baixar Excel",
-    data=tabela.to_csv(index=False).encode('utf-8'),
-    file_name="resumo_ponto.csv",
-    mime='text/csv'
+# Rankings
+ranking_horas = (
+    df_mes[df_mes['Hora_extra']]
+    .groupby('Nome')['Minutos_extras']
+    .sum()
+    .reset_index(name='Total_minutos_extras')
 )
+ranking_horas['Horas_fmt'] = ranking_horas['Total_minutos_extras'].apply(minutos_para_hms)
+ranking_horas = ranking_horas.sort_values(by='Total_minutos_extras', ascending=False)
+
+ranking_fora_turno = (
+    df_mes[df_mes['Entrada_fora_turno']]
+    .groupby('Nome')
+    .size()
+    .reset_index(name='Dias_fora_turno')
+).sort_values(by='Dias_fora_turno', ascending=False)
+
+# Exibir rankings
+col1, col2 = st.columns(2)
+with col1:
+    st.subheader(f"⏰ Ranking - Total de Horas Extras ({mes_selecionado})")
+    st.dataframe(ranking_horas.rename(columns={'Nome': 'Funcionário', 'Horas_fmt': 'Horas Extras'}), use_container_width=True)
+
+with col2:
+    st.subheader(f"🚨 Ranking - Dias Fora do Turno ({mes_selecionado})")
+    st.dataframe(ranking_fora_turno.rename(columns={'Nome': 'Funcionário'}), use_container_width=True)
+
+# Detalhamento ofensores
+top50_nomes = pd.concat([ranking_horas.head(50)['Nome'], ranking_fora_turno.head(50)['Nome']]).drop_duplicates().tolist()
+df_offensores = df_mes[(df_mes['Nome'].isin(top50_nomes)) & (df_mes['Hora_extra'] | df_mes['Entrada_fora_turno'])]
+
+st.markdown("---")
+st.subheader(f"🔍 Detalhamento dos 50 maiores ofensores em horas extras ou fora do turno ({mes_selecionado})")
+
+for nome in top50_nomes:
+    df_func = df_offensores[df_offensores['Nome'] == nome]
+    if df_func.empty:
+        continue
+    with st.expander(f"{nome} - {len(df_func)} infrações"):
+        st.dataframe(
+            df_func[['Data_fmt', 'Entrada_fmt', 'Saida_fmt', 'Turnos.ENTRADA', 'Turnos.SAIDA', 'Hora_extra', 'Entrada_fora_turno']].rename(
+                columns={
+                    'Data_fmt': 'Data',
+                    'Entrada_fmt': 'Entrada',
+                    'Saida_fmt': 'Saída',
+                    'Turnos.ENTRADA': 'Turno Entrada',
+                    'Turnos.SAIDA': 'Turno Saída',
+                    'Hora_extra': 'Hora Extra',
+                    'Entrada_fora_turno': 'Fora do Turno'
+                }
+            ),
+            use_container_width=True
+        )
+
+# Gráficos
+fig_horas = px.bar(ranking_horas, x='Total_minutos_extras', y='Nome', orientation='h',
+    labels={'Total_minutos_extras': 'Minutos', 'Nome': 'Funcionário'}, text='Horas_fmt',
+    title='Minutos de Horas Extras por Funcionário')
+fig_horas.update_layout(yaxis={'categoryorder': 'total ascending'}, plot_bgcolor='white')
+st.plotly_chart(fig_horas, use_container_width=True)
+
+fig_fora = px.bar(ranking_fora_turno, x='Dias_fora_turno', y='Nome', orientation='h',
+    labels={'Dias_fora_turno': 'Dias Fora do Turno', 'Nome': 'Funcionário'}, text='Dias_fora_turno',
+    title='Dias Fora do Turno por Funcionário')
+fig_fora.update_layout(yaxis={'categoryorder': 'total ascending'}, plot_bgcolor='white')
+st.plotly_chart(fig_fora, use_container_width=True)
+
+# Relatório consolidado
+with st.expander("📁 Relatório Consolidado de Jornada e Horas Extras"):
+    df['Horas_extras'] = df['Minutos_extras'].apply(lambda m: round(m / 60, 2) if m > 0 else 0)
+    df['Mes'] = df['Data'].dt.strftime('%b')
+    df['Deslocamento'] = df.apply(
+        lambda row: f"{row['Entrada_fmt']} - {row['Saida_fmt']} (Jornada: {row['Turnos.ENTRADA'].strftime('%H:%M')} - {row['Turnos.SAIDA'].strftime('%H:%M')})"
+        if pd.notnull(row['Entrada 1']) and pd.notnull(row['Saída 1']) and pd.notnull(row['Turnos.ENTRADA']) and pd.notnull(row['Turnos.SAIDA']) else '',
+        axis=1
+    )
+
+    pivot = df.pivot_table(index='Nome', columns='Mes', values='Horas_extras', aggfunc='sum').fillna(0)
+    deslocamentos = df.groupby('Nome')['Deslocamento'].apply(lambda x: ', '.join(x)).reset_index()
+    final = pivot.merge(deslocamentos, on='Nome', how='left').rename(columns={'Deslocamento': 'Deslocamento da Jornada'})
+
+    st.dataframe(final, use_container_width=True)
+
+    excel_bytes = BytesIO()
+    with pd.ExcelWriter(excel_bytes, engine='xlsxwriter') as writer:
+        final.to_excel(writer, index=False, sheet_name='Relatorio Consolidado')
+    st.download_button("📅 Baixar Excel Consolidado", data=excel_bytes.getvalue(), file_name="relatorio_consolidado.xlsx")
